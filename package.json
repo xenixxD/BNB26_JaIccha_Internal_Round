@@ -1,0 +1,19 @@
+{
+  "name": "bnb26_jaiccha_internal_round",
+  "version": "1.0.0",
+  "description": "- Sohan Das\r - Arkadeep Sengupta\r - Sohan Saha\r - Priyam Thapa",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xenixxD/BNB26_JaIccha_Internal_Round.git"
+  },
+  "keywords": [],
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/xenixxD/BNB26_JaIccha_Internal_Round/issues"
+  },
+  "homepage": "https://github.com/xenixxD/BNB26_JaIccha_Internal_Round#readme"
+}
