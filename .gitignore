@@ -1,0 +1,24 @@
+# Environment & Secret variables
+.env
+.env.local
+.env.*.local
+
+# Dependency directories
+node_modules/
+dist/
+build/
+server/.venv/
+
+# Server temporary files & media storage
+server/uploads/*
+!server/uploads/.gitkeep
+server/exports/*
+!server/exports/.gitkeep
+__pycache__/
+*.pyc
+
+# IDE & OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
