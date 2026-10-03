@@ -6,7 +6,9 @@ class SystemHealthResponse(BaseModel):
     ffmpeg_available: bool
     ffmpeg_path: Optional[str] = None
     gemini_configured: bool
-    version: str = "1.0.0"
+    groq_configured: bool
+    whisper_available: bool
+    version: str = "1.2.0"
 
 class ProjectItem(BaseModel):
     id: str
@@ -62,11 +64,13 @@ class PotentialAnalysisRequest(BaseModel):
     transcript: Optional[str] = None
     min_duration: float = 15.0
     max_duration: float = 60.0
+    provider: Optional[str] = "auto" # "auto" | "gemini" | "groq"
 
 class PotentialAnalysisResponse(BaseModel):
     asset_id: str
     candidates: List[MomentCandidate]
     methodology: str = "NLP Heuristic & Structure Analysis"
+    provider_used: Optional[str] = "auto"
 
 # Retention Analyzer Schemas
 class WeakSection(BaseModel):
@@ -81,6 +85,7 @@ class WeakSection(BaseModel):
 class RetentionAnalysisRequest(BaseModel):
     asset_id: str
     clip_id: Optional[str] = None
+    provider: Optional[str] = "auto"
 
 class RetentionAnalysisResponse(BaseModel):
     asset_id: str
@@ -90,6 +95,7 @@ class RetentionAnalysisResponse(BaseModel):
     weak_sections: List[WeakSection]
     actionable_recommendations: List[str]
     methodology_note: str = "Heuristic prediction based on transcript pacing, pause density, and topic boundaries (Not real platform analytics)."
+    provider_used: Optional[str] = "auto"
 
 # A/B Hook Generator Schemas
 class HookVariation(BaseModel):
@@ -103,16 +109,21 @@ class ABHookRequest(BaseModel):
     clip_id: str
     segment_text: str
     preferred_styles: Optional[List[str]] = None
+    tone: Optional[str] = "curious" # "curious" | "bold" | "educational" | "professional"
+    audience: Optional[str] = "Creators & Engineers"
+    provider: Optional[str] = "auto"
 
 class ABHookResponse(BaseModel):
     clip_id: str
     original_hook: str
     variations: List[HookVariation]
+    provider_used: Optional[str] = "auto"
 
 class ScriptMatchRequest(BaseModel):
     asset_id: str
     script_text: str
     transcript_json: Optional[List[Dict[str, Any]]] = None
+    provider: Optional[str] = "auto"
 
 class ScriptMatchItem(BaseModel):
     id: str
@@ -126,11 +137,15 @@ class ScriptMatchItem(BaseModel):
 class ScriptMatchResponse(BaseModel):
     asset_id: str
     matches: List[ScriptMatchItem]
+    provider_used: Optional[str] = "auto"
 
 class ContentGenRequest(BaseModel):
     clip_id: str
     transcript_segment: str
     platform: str = "instagram_reels"
+    tone: Optional[str] = "curious"
+    topic: Optional[str] = "AI Creator Workflow"
+    provider: Optional[str] = "auto"
 
 class ContentGenResponse(BaseModel):
     hooks: List[str]
@@ -138,6 +153,26 @@ class ContentGenResponse(BaseModel):
     description: str
     hashtags: List[str]
     subtitles: List[Dict[str, Any]]
+    provider_used: Optional[str] = "auto"
+
+class PlannerGenerateRequest(BaseModel):
+    topic: str
+    niche: Optional[str] = "Tech & AI Content Creation"
+    days: int = 7
+    provider: Optional[str] = "auto"
+
+class PlannerGenerateResponse(BaseModel):
+    topic: str
+    niche: str
+    items: List[Dict[str, Any]]
+    provider_used: Optional[str] = "auto"
+
+class TranscriptionResponse(BaseModel):
+    filename: str
+    text: str
+    duration: float
+    segments: Optional[List[Dict[str, Any]]] = None
+    provider_used: str = "groq_whisper"
 
 class ClipTrimRequest(BaseModel):
     asset_id: str

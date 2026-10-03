@@ -1,12 +1,12 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useStore } from '../../store/useStore';
-import { Search, Bell, HelpCircle, Zap, CheckCircle2, AlertTriangle, User } from 'lucide-react';
+import { Search, Bell, HelpCircle, Zap, CheckCircle2, AlertTriangle, User, Sparkles } from 'lucide-react';
 
 export const Header = ({ onOpenUploadModal }) => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { searchQuery, setSearchQuery, projects, activeProjectId, systemHealth, user } = useStore();
+  const { searchQuery, setSearchQuery, projects, activeProjectId, systemHealth, user, aiProvider, setAiProvider } = useStore();
 
   const activeProj = projects.find((p) => p.id === activeProjectId) || projects[0];
 
@@ -39,6 +39,22 @@ export const Header = ({ onOpenUploadModal }) => {
 
       {/* Right Cluster */}
       <div className="flex items-center gap-2.5">
+        {/* AI Provider Selector */}
+        <div className="flex items-center bg-surface-inset border border-border-subtle rounded-chip px-2 py-0.5 text-xs font-semibold">
+          <Sparkles className="w-3.5 h-3.5 text-accent mr-1.5" />
+          <span className="text-ink-muted text-[11px] mr-1 hidden md:inline">Engine:</span>
+          <select
+            value={aiProvider}
+            onChange={(e) => setAiProvider(e.target.value)}
+            className="bg-transparent text-ink-primary text-[11px] font-bold cursor-pointer focus:outline-none"
+            title="Select AI Provider Engine"
+          >
+            <option value="auto">Auto (Gemini + Groq)</option>
+            <option value="gemini">Gemini 3.8 Flash</option>
+            <option value="groq">Groq Qwen 3.8</option>
+          </select>
+        </div>
+
         {/* System Health Status Pill */}
         <div className={`h-[28px] px-2.5 rounded-chip text-[11px] font-mono font-medium flex items-center gap-1.5 border ${
           systemHealth.ffmpeg_available

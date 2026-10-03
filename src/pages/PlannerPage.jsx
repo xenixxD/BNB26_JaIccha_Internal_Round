@@ -16,9 +16,17 @@ import {
 
 export const PlannerPage = () => {
   const navigate = useNavigate();
-  const { clips, moveClipStatus, setActiveClip } = useStore();
+  const { clips, moveClipStatus, setActiveClip, generatePlannerCards, aiProvider } = useStore();
   const [viewMode, setViewMode] = useState('kanban'); // 'kanban' | 'calendar' | 'list'
   const [filterPlatform, setFilterPlatform] = useState('All');
+  
+  // AI Generator state
+  const [isAiPanelOpen, setIsAiPanelOpen] = useState(false);
+  const [topicInput, setTopicInput] = useState('AI Creator Tools & Automation Hacks');
+  const [nicheSelect, setNicheSelect] = useState('Tech & AI');
+  const [daysSelect, setDaysSelect] = useState(7);
+  const [generating, setGenerating] = useState(false);
+  const [genSuccessMsg, setGenSuccessMsg] = useState(null);
 
   const columns = [
     { title: 'Draft', status: 'Draft', badge: 'neutral' },
@@ -28,6 +36,20 @@ export const PlannerPage = () => {
   ];
 
   const filteredClips = clips.filter((c) => filterPlatform === 'All' || c.platform === filterPlatform);
+
+  const handleGenerateAiIdeas = async () => {
+    setGenerating(true);
+    setGenSuccessMsg(null);
+    try {
+      const newClips = await generatePlannerCards(topicInput, nicheSelect, Number(daysSelect));
+      setGenSuccessMsg(`Generated ${newClips.length} AI content ideas for your calendar!`);
+      setTimeout(() => setGenSuccessMsg(null), 4000);
+    } catch (err) {
+      console.error("AI Generation error:", err);
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   return (
     <div className="space-y-5 max-w-[1600px] mx-auto">
@@ -39,28 +61,107 @@ export const PlannerPage = () => {
           { label: 'Content Planner' }
         ]}
         actions={
-          <div className="flex bg-surface-inset p-0.5 rounded-chip border border-border-subtle">
-            <button
-              onClick={() => setViewMode('kanban')}
-              className={`h-[28px] px-3 rounded-chip text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
-                viewMode === 'kanban' ? 'bg-accent text-white shadow-sm' : 'text-ink-muted hover:text-ink-primary'
-              }`}
+          <div className="flex items-center gap-2">
+            <Button
+              variant="primary"
+              size="sm"
+              icon={Sparkles}
+              onClick={() => setIsAiPanelOpen(!isAiPanelOpen)}
             >
-              <Kanban className="w-3.5 h-3.5" />
-              <span>Kanban</span>
-            </button>
-            <button
-              onClick={() => setViewMode('calendar')}
-              className={`h-[28px] px-3 rounded-chip text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
-                viewMode === 'calendar' ? 'bg-accent text-white shadow-sm' : 'text-ink-muted hover:text-ink-primary'
-              }`}
-            >
-              <Calendar className="w-3.5 h-3.5" />
-              <span>Calendar</span>
-            </button>
+              {isAiPanelOpen ? 'Hide AI Generator' : 'AI Idea Generator'}
+            </Button>
+
+            <div className="flex bg-surface-inset p-0.5 rounded-chip border border-border-subtle">
+              <button
+                onClick={() => setViewMode('kanban')}
+                className={`h-[28px] px-3 rounded-chip text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                  viewMode === 'kanban' ? 'bg-accent text-white shadow-sm' : 'text-ink-muted hover:text-ink-primary'
+                }`}
+              >
+                <Kanban className="w-3.5 h-3.5" />
+                <span>Kanban</span>
+              </button>
+              <button
+                onClick={() => setViewMode('calendar')}
+                className={`h-[28px] px-3 rounded-chip text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                  viewMode === 'calendar' ? 'bg-accent text-white shadow-sm' : 'text-ink-muted hover:text-ink-primary'
+                }`}
+              >
+                <Calendar className="w-3.5 h-3.5" />
+                <span>Calendar</span>
+              </button>
+            </div>
           </div>
         }
       />
+
+      {/* AI IDEA GENERATOR PANEL */}
+      {isAiPanelOpen && (
+        <Panel title="AI Content Calendar Generator" action={<Badge variant="accent">{aiProvider.toUpperCase()} ACTIVE</Badge>}>
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div>
+                <label className="text-micro font-bold text-ink-muted uppercase tracking-wider block mb-1">Topic / Core Theme</label>
+                <input
+                  type="text"
+                  value={topicInput}
+                  onChange={(e) => setTopicInput(e.target.value)}
+                  className="w-full bg-surface-inset border border-border-subtle rounded-btn px-3 py-1.5 text-xs text-ink-primary font-semibold focus:border-accent"
+                />
+              </div>
+
+              <div>
+                <label className="text-micro font-bold text-ink-muted uppercase tracking-wider block mb-1">Niche Category</label>
+                <select
+                  value={nicheSelect}
+                  onChange={(e) => setNicheSelect(e.target.value)}
+                  className="w-full bg-surface-inset border border-border-subtle rounded-btn px-3 py-1.5 text-xs text-ink-primary font-semibold focus:border-accent cursor-pointer"
+                >
+                  <option value="Tech & AI">Tech & AI</option>
+                  <option value="Productivity & Work">Productivity & Work</option>
+                  <option value="Creator Economy">Creator Economy</option>
+                  <option value="Educational & How-To">Educational & How-To</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-micro font-bold text-ink-muted uppercase tracking-wider block mb-1">Planning Horizon</label>
+                <select
+                  value={daysSelect}
+                  onChange={(e) => setDaysSelect(e.target.value)}
+                  className="w-full bg-surface-inset border border-border-subtle rounded-btn px-3 py-1.5 text-xs text-ink-primary font-semibold focus:border-accent cursor-pointer"
+                >
+                  <option value={3}>3 Days (3 Ideas)</option>
+                  <option value={7}>7 Days (7 Ideas)</option>
+                  <option value={14}>14 Days (14 Ideas)</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-2 border-t border-border-subtle">
+              <span className="text-body-sm text-ink-muted">
+                Engine: <strong className="text-accent">{aiProvider === 'auto' ? 'Auto-Fallback (Gemini + Groq)' : aiProvider}</strong>
+              </span>
+
+              <Button
+                variant="primary"
+                size="sm"
+                icon={Sparkles}
+                isLoading={generating}
+                onClick={handleGenerateAiIdeas}
+              >
+                Generate Calendar Cards
+              </Button>
+            </div>
+
+            {genSuccessMsg && (
+              <div className="p-2.5 bg-status-success-soft text-status-success rounded-panel text-xs font-semibold border border-emerald-200">
+                {genSuccessMsg}
+              </div>
+            )}
+          </div>
+        </Panel>
+      )}
 
       {/* Platform Filter */}
       <div className="flex items-center gap-2 overflow-x-auto">

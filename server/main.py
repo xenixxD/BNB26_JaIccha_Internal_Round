@@ -8,7 +8,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv, find_dotenv
 
+<<<<<<< HEAD
 # Load local configuration before importing modules that resolve the data directory.
+=======
+# Ensure .env configuration is loaded from workspace root
+>>>>>>> 3dd8d15f (feat: complete Gemini + Groq AI dual-provider architecture, Whisper audio transcription, and AI content planner generator)
 env_path = find_dotenv(usecwd=True)
 load_dotenv(env_path)
 
@@ -35,12 +39,15 @@ try:
         ABHookRequest, ABHookResponse,
         ScriptMatchRequest, ScriptMatchResponse,
         ContentGenRequest, ContentGenResponse,
+        PlannerGenerateRequest, PlannerGenerateResponse,
+        TranscriptionResponse,
         ClipTrimRequest, TrimTaskResponse
     )
     from ffmpeg_service import check_ffmpeg, process_video_trim, get_task_status
     from ai_engine import (
         analyze_video_potential, analyze_retention_risk, generate_ab_hooks,
-        match_script_to_transcript, generate_ai_content, GEMINI_API_KEY
+        generate_planner_ideas, match_script_to_transcript, generate_ai_content,
+        transcribe_media_file, GEMINI_API_KEY, GROQ_API_KEY, genai_client, groq_client
     )
 except ModuleNotFoundError:
     from server.schemas import (
@@ -50,20 +57,23 @@ except ModuleNotFoundError:
         ABHookRequest, ABHookResponse,
         ScriptMatchRequest, ScriptMatchResponse,
         ContentGenRequest, ContentGenResponse,
+        PlannerGenerateRequest, PlannerGenerateResponse,
+        TranscriptionResponse,
         ClipTrimRequest, TrimTaskResponse
     )
     from server.ffmpeg_service import check_ffmpeg, process_video_trim, get_task_status
     from server.ai_engine import (
         analyze_video_potential, analyze_retention_risk, generate_ab_hooks,
-        match_script_to_transcript, generate_ai_content, GEMINI_API_KEY
+        generate_planner_ideas, match_script_to_transcript, generate_ai_content,
+        transcribe_media_file, GEMINI_API_KEY, GROQ_API_KEY, genai_client, groq_client
     )
 
 init_db()
 
 app = FastAPI(
     title="CreatorAI Backend Server",
-    description="FastAPI backend providing video clipping, transcription, retention analysis, and A/B hook lab services.",
-    version="1.1.0"
+    description="FastAPI backend providing Gemini + Groq AI video intelligence, transcription, retention analysis, and FFmpeg clipping.",
+    version="1.2.0"
 )
 
 app.add_middleware(
@@ -107,8 +117,10 @@ def get_health():
         status="ok",
         ffmpeg_available=ffmpeg_ok,
         ffmpeg_path=ffmpeg_path,
-        gemini_configured=bool(GEMINI_API_KEY or os.getenv("GEMINI_API_KEY")),
-        version="1.1.0"
+        gemini_configured=bool(genai_client or os.getenv("GEMINI_API_KEY")),
+        groq_configured=bool(groq_client or os.getenv("GROQ_API_KEY")),
+        whisper_available=bool(groq_client or os.getenv("GROQ_API_KEY")),
+        version="1.2.0"
     )
 
 @app.get("/api/projects", response_model=list)
@@ -300,38 +312,105 @@ async def upload_asset(
 
 @app.post("/api/ai/analyze-potential", response_model=PotentialAnalysisResponse)
 def api_analyze_potential(request: PotentialAnalysisRequest):
-    candidates = analyze_video_potential(asset_filename=request.asset_id)
+    candidates, provider_used = analyze_video_potential(
+        asset_filename=request.asset_id,
+        provider=request.provider or "auto"
+    )
     return PotentialAnalysisResponse(
         asset_id=request.asset_id,
         candidates=candidates,
-        methodology="Gemini 3.8 Flash Video & Transcript Intelligence"
+        methodology=f"Video Virality Intelligence via {provider_used}",
+        provider_used=provider_used
     )
 
 @app.post("/api/ai/analyze-retention", response_model=RetentionAnalysisResponse)
 def api_analyze_retention(request: RetentionAnalysisRequest):
-    res = analyze_retention_risk(asset_id=request.asset_id)
+    res, provider_used = analyze_retention_risk(
+        asset_id=request.asset_id,
+        provider=request.provider or "auto"
+    )
     return RetentionAnalysisResponse(**res)
 
 @app.post("/api/ai/ab-hooks", response_model=ABHookResponse)
 def api_ab_hooks(request: ABHookRequest):
-    res = generate_ab_hooks(segment_text=request.segment_text)
+    res, provider_used = generate_ab_hooks(
+        segment_text=request.segment_text,
+        tone=request.tone or "curious",
+        audience=request.audience or "Creators & Engineers",
+        provider=request.provider or "auto"
+    )
     return ABHookResponse(**res)
+
+@app.post("/api/ai/planner-generate", response_model=PlannerGenerateResponse)
+def api_planner_generate(request: PlannerGenerateRequest):
+    res, provider_used = generate_planner_ideas(
+        topic=request.topic,
+        niche=request.niche or "Tech & AI",
+        days=request.days or 7,
+        provider=request.provider or "auto"
+    )
+    return PlannerGenerateResponse(
+        topic=res["topic"],
+        niche=res["niche"],
+        items=res["items"],
+        provider_used=provider_used
+    )
 
 @app.post("/api/ai/script-match", response_model=ScriptMatchResponse)
 def api_script_match(request: ScriptMatchRequest):
-    matches = match_script_to_transcript(script_text=request.script_text)
+    matches, provider_used = match_script_to_transcript(
+        script_text=request.script_text,
+        provider=request.provider or "auto"
+    )
     return ScriptMatchResponse(
         asset_id=request.asset_id,
-        matches=matches
+        matches=matches,
+        provider_used=provider_used
     )
 
 @app.post("/api/ai/generate-content", response_model=ContentGenResponse)
 def api_generate_content(request: ContentGenRequest):
-    content = generate_ai_content(
+    content, provider_used = generate_ai_content(
         transcript_segment=request.transcript_segment,
-        platform=request.platform
+        platform=request.platform,
+        tone=request.tone or "curious",
+        topic=request.topic or "AI Creator Workflow",
+        provider=request.provider or "auto"
     )
-    return ContentGenResponse(**content)
+    return ContentGenResponse(
+        hooks=content.get("hooks", []),
+        caption=content.get("caption", ""),
+        description=content.get("description", ""),
+        hashtags=content.get("hashtags", []),
+        subtitles=content.get("subtitles", []),
+        provider_used=provider_used
+    )
+
+@app.post("/api/ai/transcribe")
+async def api_transcribe(file: UploadFile = File(...)):
+    try:
+        unique_id = str(uuid.uuid4())[:8]
+        saved_filename = f"transcribe_{unique_id}_{file.filename}"
+        saved_path = os.path.join(UPLOADS_DIR, saved_filename)
+        
+        with open(saved_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            
+        result = transcribe_media_file(saved_path)
+        
+        # Cleanup temporary audio/video file
+        try:
+            if os.path.exists(saved_path):
+                os.remove(saved_path)
+        except Exception as cleanup_err:
+            print(f"Cleanup error for {saved_path}: {cleanup_err}")
+            
+        if result.get("status") == "error":
+            raise HTTPException(status_code=500, detail=result.get("error_message"))
+            
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
 
 @app.post("/api/clips/trim", response_model=TrimTaskResponse)
 def api_trim_clip(request: ClipTrimRequest):

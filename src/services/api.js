@@ -76,7 +76,7 @@ export const api = {
 
   async getSystemHealth() {
     try {
-      const res = await axios.get(`${API_BASE}/health`, { timeout: 3000 });
+      const res = await axios.get(`${API_BASE}/health`, { timeout: 5000 });
       return res.data;
     } catch (err) {
       return {
@@ -84,7 +84,9 @@ export const api = {
         ffmpeg_available: false,
         ffmpeg_path: null,
         gemini_configured: false,
-        version: "1.1.0 (Offline Demo Mode)"
+        groq_configured: false,
+        whisper_available: false,
+        version: "1.2.0 (Offline Demo Mode)"
       };
     }
   },
@@ -107,9 +109,12 @@ export const api = {
     return res.data;
   },
 
-  async analyzePotential(assetId) {
+  async analyzePotential(assetId, provider = 'auto') {
     try {
-      const res = await axios.post(`${API_BASE}/ai/analyze-potential`, { asset_id: assetId }, { timeout: 5000 });
+      const res = await axios.post(`${API_BASE}/ai/analyze-potential`, {
+        asset_id: assetId,
+        provider: provider
+      }, { timeout: 15000 });
       return res.data;
     } catch (err) {
       console.warn('Using client AI potential fallback:', err);
@@ -117,9 +122,12 @@ export const api = {
     }
   },
 
-  async analyzeRetention(assetId) {
+  async analyzeRetention(assetId, provider = 'auto') {
     try {
-      const res = await axios.post(`${API_BASE}/ai/analyze-retention`, { asset_id: assetId }, { timeout: 5000 });
+      const res = await axios.post(`${API_BASE}/ai/analyze-retention`, {
+        asset_id: assetId,
+        provider: provider
+      }, { timeout: 15000 });
       return res.data;
     } catch (err) {
       console.warn('Using client retention analysis fallback:', err);
@@ -127,9 +135,15 @@ export const api = {
     }
   },
 
-  async generateAbHooks(clipId, segmentText) {
+  async generateAbHooks(clipId, segmentText, tone = 'curious', audience = 'Creators & Engineers', provider = 'auto') {
     try {
-      const res = await axios.post(`${API_BASE}/ai/ab-hooks`, { clip_id: clipId, segment_text: segmentText }, { timeout: 5000 });
+      const res = await axios.post(`${API_BASE}/ai/ab-hooks`, {
+        clip_id: clipId,
+        segment_text: segmentText,
+        tone: tone,
+        audience: audience,
+        provider: provider
+      }, { timeout: 15000 });
       return res.data;
     } catch (err) {
       console.warn('Using client A/B hook lab fallback:', err);
@@ -137,9 +151,28 @@ export const api = {
     }
   },
 
-  async matchScript(assetId, scriptText) {
+  async generatePlannerIdeas(topic, niche = 'Tech & AI', days = 7, provider = 'auto') {
     try {
-      const res = await axios.post(`${API_BASE}/ai/script-match`, { asset_id: assetId, script_text: scriptText }, { timeout: 5000 });
+      const res = await axios.post(`${API_BASE}/ai/planner-generate`, {
+        topic: topic,
+        niche: niche,
+        days: days,
+        provider: provider
+      }, { timeout: 15000 });
+      return res.data;
+    } catch (err) {
+      console.warn('Using client planner fallback:', err);
+      return null;
+    }
+  },
+
+  async matchScript(assetId, scriptText, provider = 'auto') {
+    try {
+      const res = await axios.post(`${API_BASE}/ai/script-match`, {
+        asset_id: assetId,
+        script_text: scriptText,
+        provider: provider
+      }, { timeout: 15000 });
       return res.data;
     } catch (err) {
       console.warn('Using client script match fallback:', err);
@@ -147,16 +180,34 @@ export const api = {
     }
   },
 
-  async generateContent(clipId, transcriptSegment, platform = 'instagram_reels') {
+  async generateContent(clipId, transcriptSegment, platform = 'instagram_reels', tone = 'curious', topic = 'AI Creator Workflow', provider = 'auto') {
     try {
       const res = await axios.post(`${API_BASE}/ai/generate-content`, {
         clip_id: clipId,
         transcript_segment: transcriptSegment,
-        platform: platform
-      }, { timeout: 5000 });
+        platform: platform,
+        tone: tone,
+        topic: topic,
+        provider: provider
+      }, { timeout: 15000 });
       return res.data;
     } catch (err) {
       console.warn('Using client AI content gen fallback:', err);
+      return null;
+    }
+  },
+
+  async transcribeMedia(file) {
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await axios.post(`${API_BASE}/ai/transcribe`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 120000
+      });
+      return res.data;
+    } catch (err) {
+      console.warn('Groq Whisper transcription failed or offline:', err);
       return null;
     }
   },

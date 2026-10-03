@@ -37,10 +37,12 @@ export const useStore = create((set, get) => ({
       // AI Content Intelligence Upgrades State
       retentionAnalysis: null,
       abHookVariations: [],
+      aiProvider: 'auto', // 'auto' | 'gemini' | 'groq'
 
       searchQuery: '',
 
       setSearchQuery: (query) => set({ searchQuery: query }),
+      setAiProvider: (provider) => set({ aiProvider: provider }),
 
       hydrateWorkspace: async () => {
         try {
@@ -276,7 +278,7 @@ export const useStore = create((set, get) => ({
         const cached = get().candidateMoments.filter((candidate) => candidate.assetId === assetId);
         if (cached.length) return cached;
         const targetAsset = get().assets.find((a) => a.id === assetId);
-        const response = await api.analyzePotential(assetId);
+        const response = await api.analyzePotential(assetId, get().aiProvider);
         if (response && response.candidates && response.candidates.length > 0) {
           const candidates = response.candidates.map((candidate) => ({
             ...candidate,
@@ -375,7 +377,7 @@ export const useStore = create((set, get) => ({
 
       runRetentionAnalyzer: async (assetId) => {
         const targetAsset = get().assets.find((a) => a.id === assetId);
-        const response = await api.analyzeRetention(assetId);
+        const response = await api.analyzeRetention(assetId, get().aiProvider);
         if (response) {
           set({ retentionAnalysis: response });
           await get().persistProjectState('retentionAnalysis', response);
@@ -443,7 +445,7 @@ export const useStore = create((set, get) => ({
       },
 
       runAbHookGenerator: async (clipId, segmentText) => {
-        const response = await api.generateAbHooks(clipId, segmentText);
+        const response = await api.generateAbHooks(clipId, segmentText, 'curious', 'Creators & Engineers', get().aiProvider);
         if (response && response.variations) {
           set({ abHookVariations: response.variations });
           await get().persistProjectState('abHookVariations', response.variations);
@@ -495,7 +497,7 @@ export const useStore = create((set, get) => ({
       },
 
       runScriptMatcher: async (assetId, scriptText) => {
-        const response = await api.matchScript(assetId, scriptText);
+        const response = await api.matchScript(assetId, scriptText, get().aiProvider);
         if (response && response.matches) {
           set({ scriptMatches: response.matches });
           await get().persistProjectState('scriptMatches', response.matches);
@@ -642,7 +644,7 @@ export const useStore = create((set, get) => ({
         const clip = get().clips.find((c) => c.id === clipId);
         if (!clip) return;
 
-        const res = await api.generateContent(clipId, clip.caption || 'Sample segment', platform);
+        const res = await api.generateContent(clipId, clip.caption || 'Sample segment', platform, 'curious', 'AI Creator Workflow', get().aiProvider);
 
         if (res) {
           set((state) => ({
@@ -660,6 +662,40 @@ export const useStore = create((set, get) => ({
             )
           }));
         }
+      },
+
+      generatePlannerCards: async (topic, niche = 'Tech & AI', days = 7) => {
+        const res = await api.generatePlannerIdeas(topic, niche, days, get().aiProvider);
+        if (res && res.cards && res.cards.length > 0) {
+          const newClips = res.cards.map((card, idx) => ({
+            id: `clip_plan_${Date.now()}_${idx}`,
+            projectId: get().activeProjectId,
+            assetId: 'asset_v1',
+            title: card.title,
+            startTime: 0.0,
+            endTime: 30.0,
+            duration: 30.0,
+            aspectRatio: '9:16',
+            potentialScore: card.estimated_viral_score || 92.0,
+            ratingLabel: 'High Potential',
+            suggestedHook: card.hook,
+            hooks: [card.hook],
+            selectedHookIndex: 0,
+            caption: `${card.caption}\n\nTarget Audience: ${card.target_audience}`,
+            hashtags: card.hashtags || ['#CreatorAI', '#ViralContent'],
+            subtitles: [{ id: 1, start: 0.0, end: 4.0, text: card.hook }],
+            status: 'Scheduled',
+            scheduledDate: card.suggested_date,
+            platform: card.platform || 'Instagram Reels',
+            exportedUrl: null
+          }));
+
+          set((state) => ({
+            clips: [...newClips, ...state.clips]
+          }));
+          return newClips;
+        }
+        return [];
       },
 
       exportClip: async (clipId) => {
