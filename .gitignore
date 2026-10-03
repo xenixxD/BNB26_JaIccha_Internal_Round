@@ -19,6 +19,7 @@ outputs/
 tmp/
 
 # Server temporary files & media storage
+server/data/
 server/uploads/*
 !server/uploads/.gitkeep
 server/exports/*

@@ -15,7 +15,7 @@ CreatorAI is a creator-workflow prototype for organizing long-form media and pre
 - [Configuration](#configuration)
 - [Using the application](#using-the-application)
 - [Backend API](#backend-api)
-- [Data and media storage](#data-and-media-storage)
+- [Temporary Storage](#temporary-storage)
 - [AI behavior](#ai-behavior)
 - [Validation](#validation)
 - [Known limitations and demo guidance](#known-limitations-and-demo-guidance)
@@ -34,16 +34,17 @@ The current codebase provides:
 - Local disk storage for uploaded files and generated exports.
 - FFmpeg processing to trim a local uploaded video and convert it to a requested aspect ratio.
 - Gemini integration hooks, with heuristic/demo behavior when the provider is unavailable or unconfigured.
-- Browser-side Zustand state persistence, which keeps much of the demo workspace state in the browser.
+- Zustand workspace state hydrated from and saved through the local FastAPI API; browser storage is not the persistence source.
+- Explicit, versioned editor drafts and server-local persistence for generated analysis state and export metadata.
 
 ## Current implementation status
 
 | Area | Current state | Important context |
 |---|---|---|
-| Frontend | React/Vite application builds | Several workflows still rely on seeded or browser-persisted demo state. |
+| Frontend | React/Vite app loads workspace records from the backend | Unsaved editor changes remain in memory until the user explicitly selects **Save Draft**. |
 | Backend | FastAPI service with health endpoint and API routes | Suitable for local development and guided demonstrations, not hardened for public exposure. |
-| Database | SQLite persists projects, assets, and clips | Local file database; no migrations, user ownership, or production database configuration. |
-| Uploads/exports | Local filesystem under `server/uploads` and `server/exports` | Not replicated, backed up, or stored in a cloud bucket. |
+| Database | SQLite persists projects, assets, clips, saved drafts, project analysis state, and output metadata | Temporary local development database; no user ownership or production database configuration. |
+| Uploads/exports | Local filesystem under `server/data/assets` and `server/data/outputs` | Same-host persistence only; not replicated, backed up, or stored in a cloud bucket. |
 | Video processing | FFmpeg trim/export pipeline | Processing runs synchronously in the API request; long tasks can block a worker/request. |
 | AI | Gemini client can be initialized from an environment key | Without a working key, the AI module uses heuristic/default transcript behavior. |
 | Authentication | Auth screen and demo user state exist | No verified account system, sessions, or API authorization is implemented. |
@@ -56,7 +57,7 @@ The current codebase provides:
 - React 18
 - Vite
 - React Router
-- Zustand with persistence middleware
+- Zustand for in-memory UI state hydrated from backend APIs
 - Axios
 - Tailwind CSS
 - Recharts
@@ -84,22 +85,24 @@ The current codebase provides:
 │   ├── data/mockData.js        # Seed/demo frontend records
 │   ├── pages/                  # Dashboard and workflow screens
 │   ├── services/
-│   │   ├── api.js              # HTTP API calls and client-side fallbacks
-│   │   └── storage.js          # Browser storage helpers
+│   │   └── api.js              # Workspace and persistence API client
 │   └── store/useStore.js       # Zustand application state
 └── server/
     ├── main.py                 # FastAPI application and endpoints
-    ├── database.py             # SQLite schema, seed data, and CRUD helpers
+    ├── database.py             # SQLite schema, seed data, CRUD, draft versions, and saved state
+    ├── local_storage.py        # Configurable local data root and legacy data migration
     ├── schemas.py              # Request and response models
     ├── ai_engine.py            # Gemini integration and heuristic fallbacks
     ├── ffmpeg_service.py       # Media trim/export and task status
     ├── requirements.txt
-    ├── uploads/                # Created at runtime; local uploaded media
-    ├── exports/                # Created at runtime; generated media
-    └── creatorai.db            # Created at runtime; SQLite database
+    └── data/                   # Local-only runtime data; ignored by Git
+        ├── assets/             # Uploaded source files
+        ├── outputs/            # FFmpeg-generated output files
+        ├── temp/               # Temporary processing files
+        └── creatorai.db        # SQLite metadata, drafts, and generated state
 ```
 
-The database and media directories are runtime data, not source files. Keep backups if local demo data must be preserved. Do not commit API keys, private media, or user data.
+The local data directory is runtime data, not source code. It is ignored by Git. Keep backups if local demo data must be preserved. Do not commit API keys, private media, or user data.
 
 ## Requirements
 
@@ -145,7 +148,7 @@ From the repository root:
 
 The API is available at `http://127.0.0.1:8000`. Interactive API documentation is at `http://127.0.0.1:8000/docs`.
 
-The first backend start creates the SQLite schema and seeds sample projects, assets, and clips if the project table is empty. Runtime uploads and exports are placed under `server\uploads` and `server\exports`.
+The first backend start creates the SQLite schema and seeds sample projects, assets, and clips if the project table is empty. Local data is stored under `server\data` by default. If the previous `server\creatorai.db`, `server\uploads`, or `server\exports` data exists, startup copies it into the new default data directory without removing the original.
 
 ### 4. Start the frontend
 
@@ -167,7 +170,15 @@ This produces a static bundle in `dist/`. The current project does not include a
 
 ## Configuration
 
-The backend loads environment variables from a `.env` file found from the current working directory. Optional setting:
+The backend loads environment variables from a `.env` file found from the current working directory. Local persistent storage is always enabled for the development backend. Its root can be changed with one optional setting:
+
+```dotenv
+CREATORAI_LOCAL_DATA_DIR=server/data
+```
+
+Relative paths are resolved from the current working directory. The default is `server/data` when launching from the repository root. The directory is created automatically and contains the SQLite database and server-local asset/output files. To reset local data, stop the backend and delete the configured directory (by default, `server\data`). This reset affects only local development data; it does not contact or delete cloud resources.
+
+Gemini configuration is separate and optional:
 
 ```dotenv
 GEMINI_API_KEY=your_google_ai_studio_key
@@ -175,11 +186,10 @@ GEMINI_API_KEY=your_google_ai_studio_key
 
 Keep `.env` out of version control. No key is required for the backend to start. The health endpoint reports whether a Gemini key is configured, but that only indicates configuration—not that a live AI request will succeed.
 
-Other current settings, including the API proxy target, frontend/backend ports, and SQLite path, are configured in source rather than through a complete deployment configuration system:
+Other settings, including the API proxy target and frontend/backend ports, are configured in source rather than through a complete deployment configuration system:
 
 - Vite dev server and proxy: `vite.config.js`
-- SQLite database: `server/database.py` (`server/creatorai.db`)
-- Upload/export directories: `server/ffmpeg_service.py`
+- SQLite and local file paths: `server/local_storage.py`
 - Gemini model/client: `server/ai_engine.py`
 
 ## Using the application
@@ -221,8 +231,16 @@ The FastAPI service currently exposes the following routes:
 | `GET` | `/api/assets?project_id=...` | List assets, optionally filtered by project |
 | `POST` | `/api/assets` | Create asset metadata from a JSON object |
 | `POST` | `/api/assets/upload` | Upload a file as multipart form data |
+| `PUT` | `/api/assets/{asset_id}` | Persist asset metadata updates, such as detected duration |
+| `DELETE` | `/api/assets/{asset_id}` | Delete an asset and its dependent clips, drafts, export metadata, and local media files |
 | `GET` | `/api/clips?project_id=...` | List clips, optionally filtered by project |
 | `POST` | `/api/clips` | Create a clip metadata record |
+| `PUT` | `/api/clips/{clip_id}` | Persist clip status and metadata updates |
+| `POST` | `/api/clips/{clip_id}/drafts` | Save an explicit versioned editor draft |
+| `GET` | `/api/clips/{clip_id}/drafts` | List saved draft versions in order |
+| `GET` | `/api/projects/{project_id}/state` | Load persisted transcript and analysis state |
+| `PUT` | `/api/projects/{project_id}/state/{state_key}` | Save supported project analysis state |
+| `GET` | `/api/projects/{project_id}/outputs` | List persisted export metadata |
 | `POST` | `/api/ai/analyze-potential` | Get candidate moments for an asset |
 | `POST` | `/api/ai/analyze-retention` | Get heuristic/AI retention analysis |
 | `POST` | `/api/ai/ab-hooks` | Generate hook variations |
@@ -235,17 +253,32 @@ The FastAPI service currently exposes the following routes:
 
 Use the interactive `/docs` page to inspect exact request and response shapes. The API currently has no authentication or per-user access control; do not expose it publicly with private files or data.
 
-## Data and media storage
+## Temporary Storage
 
-The backend persists the following metadata in SQLite:
+This implementation provides **temporary, persistent storage for local demos and development**. It is backed by the FastAPI server—not browser localStorage or IndexedDB—and is not a cloud or production storage service. Data persists across frontend/backend restarts on the same machine, but it is not synchronized to other machines and has no automatic backup or recovery.
 
-- **Projects:** name, description, category, target platforms, status, thumbnail, and item counts.
-- **Assets:** project association, filename, type, size, URL, upload date, duration, and status.
+The backend persists the following metadata in the local SQLite database (`server/data/creatorai.db` by default):
+
+- **Projects:** name, description/content goal, category, target platforms, status, timestamps, thumbnail, and item counts.
+- **Assets:** project association, filename, type, size, logical local URL, upload date, duration, and status. Saved script text is stored in the asset record.
 - **Clips:** project/asset association, trim range, aspect ratio, hook/caption fields, scheduling metadata, export URL, and status.
+- **Draft versions:** each explicit Save Draft creates a new immutable version with its parent version and timestamp; the latest saved fields are also restored as the current clip.
+- **Project state:** supported transcript/candidate/retention/hook/script-match results are saved and reloaded without requiring analysis to run again.
+- **Outputs:** output metadata links a generated file to its project, source asset, clip, and latest saved draft when available.
 
-SQLite is initialized automatically. The current seed routine inserts demonstration content only when there are no projects. Uploaded file bytes and generated exports are stored separately on local disk; SQLite stores their metadata and paths/URLs, not the media itself.
+SQLite is initialized automatically. The seed routine inserts demonstration content only when there are no projects. Uploaded source file bytes are stored in `server/data/assets`; generated exports are stored in `server/data/outputs`. The database stores their metadata and logical `/uploads/...` or `/exports/...` references, never the full video/audio bytes. Source uploads use unique server-generated filenames and are not overwritten by later uploads. Deleting an asset from the Asset Library requires confirmation and removes its dependent clips, saved drafts, output metadata, and files referenced through the local upload/export routes.
 
-The backend database is the only server-side persistence layer for these records. The frontend also persists Zustand state in the browser, so the browser's local state and server records are not yet a fully synchronized single source of truth. Clearing browser storage and deleting the backend database/media folders are separate actions.
+On frontend startup, projects, assets, and clips are fetched from the backend. Creating projects/scripts/clips, uploading files, saving analysis state, updating duration/status, saving drafts, and exporting use backend persistence APIs. Editor keystrokes remain in memory until **Save Draft** is clicked; each click makes the next saved version. Draft history in the editor can restore an earlier version for continued editing.
+
+The server exposes files only through the dedicated `/uploads` and `/exports` routes. It does not mount the entire local data directory or send absolute host filesystem paths to the browser. The default storage root is `server/data`; set `CREATORAI_LOCAL_DATA_DIR` to use a different root. On default startup, supported legacy data in `server/creatorai.db`, `server/uploads`, and `server/exports` is copied into the new default layout without deleting the originals. Custom storage roots skip this legacy copy.
+
+To completely reset this temporary demo storage:
+
+1. Stop the backend.
+2. Delete the configured `CREATORAI_LOCAL_DATA_DIR` directory (default `server\data`). This permanently removes local projects, metadata, uploaded files, drafts, and generated exports in that directory.
+3. Start the backend again; it creates a fresh local database and seeds demonstration records.
+
+The reset affects only the configured local directory; it does not modify any production or cloud storage. Keep a separate backup before deleting the directory if demo data needs to be retained.
 
 ## AI behavior
 
@@ -263,23 +296,24 @@ Consequently:
 The following checks have been run against the current working tree:
 
 - `npm run build` — passed; Vite emitted a warning that the generated JavaScript bundle exceeds 500 kB.
-- Python compilation of the backend modules — passed after fixing a syntax issue in the clip persistence code.
-- Direct SQLite smoke test — passed for initialization, seed data, project/asset/clip creation, and project-filtered reads.
-- FastAPI smoke test — `/api/health` and `/api/projects` returned HTTP 200; FFmpeg was detected in the checked environment.
+- `python -m compileall -q server` — passed.
+- `python -m unittest discover -s server\tests -v` — passed three focused persistence, upload, deletion, draft-version, and database-reinitialization tests.
+- Pylance syntax checks — no syntax errors in any Python file included in the workspace analysis set.
+- `npm run lint` — could not run because ESLint is not installed in this workspace.
 
-These checks validate build/startup and selected database/API behavior; they are not a complete automated test suite or proof that every UI workflow works end to end.
+These checks validate compilation, frontend bundling, and selected local persistence/API behavior. They do not prove every UI workflow or real FFmpeg video export end to end.
 
 ## Known limitations and demo guidance
 
 The app is appropriate for a guided prototype demonstration, with the following boundaries:
 
-- **Demo-oriented browser state:** the frontend starts with seeded records and persists substantial app state in the browser. Some actions do not yet round-trip through the backend.
+- **Unsaved editor changes:** editor modifications are intentionally not persisted on every keystroke; use **Save Draft** to create a durable version.
 - **No real authentication:** the auth screen and demo user do not protect API routes or isolate user data.
-- **Local-only persistence:** SQLite and media files live on the server's local disk. There is no cloud bucket, backup policy, or shared multi-instance storage.
+- **Local-only persistence:** SQLite and media files live on the server's local disk. Data is same-host only; there is no cloud bucket, backup policy, or shared multi-instance storage.
 - **No migration framework:** schema creation uses `CREATE TABLE IF NOT EXISTS`; there is no versioned migration history.
 - **AI fallback behavior:** not all results are guaranteed to be generated from uploaded media or by a live AI provider.
-- **Synchronous exports:** FFmpeg runs in the request process. Task status is held in memory, so it is not durable across server restarts and does not constitute a persistent job queue.
-- **Upload hardening:** the upload route has no configured production file-size/type policy, malware scanning, or authenticated ownership checks.
+- **Synchronous exports:** FFmpeg runs in the request process. Exported files and output metadata persist, but transient task status is held in memory and is not durable across server restarts.
+- **Upload hardening:** the upload route has a 500 MB limit and an extension allowlist, but no content-signature validation, malware scanning, or authenticated ownership checks.
 - **Prototype API contracts:** some endpoints accept generic JSON dictionaries, and project/asset/clip relationships are not yet guarded by a complete validation/authorization layer.
 - **No production operations layer:** HTTPS, rate limiting, structured monitoring, error reporting, backups, deployment automation, and recovery procedures are not configured.
 - **Build size warning:** the current frontend bundle is larger than Vite's 500 kB advisory threshold.
@@ -290,7 +324,7 @@ For presentations, describe the app as a working prototype, verify the exact sce
 
 Recommended order:
 
-1. **Make server state authoritative:** load projects/assets/clips from the API, persist all edits through the API, and make offline/demo fallbacks opt-in rather than indistinguishable from real results.
+1. **Complete server-state coverage:** workspace records and explicit editor drafts are server-backed; unsaved editor changes intentionally remain in memory, and remaining offline/demo fallbacks should be clearly labeled or made opt-in.
 2. **Add authentication and ownership:** implement accounts/sessions and enforce owner checks for every project, asset, clip, upload, and export.
 3. **Harden data contracts and migrations:** validate IDs, relationships, input bounds, filenames, and lifecycle transitions; introduce versioned schema migrations and database tests.
 4. **Move to production persistence:** use PostgreSQL for shared/concurrent data and object storage for uploads/exports, with access controls and signed URLs.

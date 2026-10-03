@@ -4,11 +4,13 @@ import subprocess
 import uuid
 from typing import Dict, Any, Optional
 
-EXPORTS_DIR = os.path.join(os.path.dirname(__file__), "exports")
-UPLOADS_DIR = os.path.join(os.path.dirname(__file__), "uploads")
+try:
+    from local_storage import ASSETS_DIR, OUTPUTS_DIR
+except ModuleNotFoundError:
+    from server.local_storage import ASSETS_DIR, OUTPUTS_DIR
 
-os.makedirs(EXPORTS_DIR, exist_ok=True)
-os.makedirs(UPLOADS_DIR, exist_ok=True)
+EXPORTS_DIR = OUTPUTS_DIR
+UPLOADS_DIR = ASSETS_DIR
 
 # Task storage in memory
 TASKS: Dict[str, Dict[str, Any]] = {}

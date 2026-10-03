@@ -4,6 +4,8 @@ import { X, FolderPlus, Layers, Target } from 'lucide-react';
 
 export const NewProjectModal = ({ isOpen, onClose }) => {
   const { createProject } = useStore();
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState('Technology & AI');
@@ -11,20 +13,26 @@ export const NewProjectModal = ({ isOpen, onClose }) => {
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!name.strip ? !name.trim() : !name) return;
-
-    createProject({
-      name,
-      description,
-      category,
-      targetPlatforms: platforms
-    });
-
-    setName('');
-    setDescription('');
-    onClose();
+    if (!name.trim() || saving) return;
+    setSaving(true);
+    setError('');
+    try {
+      await createProject({
+        name: name.trim(),
+        description,
+        category,
+        targetPlatforms: platforms
+      });
+      setName('');
+      setDescription('');
+      onClose();
+    } catch (err) {
+      setError(err.message || 'Could not save project to local storage.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const togglePlatform = (p) => {
@@ -49,6 +57,7 @@ export const NewProjectModal = ({ isOpen, onClose }) => {
         </div>
 
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          {error && <p role="alert" className="text-xs text-rose-400">{error}</p>}
           <div>
             <label className="block text-xs font-semibold text-slate-300 mb-1">Project Name *</label>
             <input
@@ -117,9 +126,10 @@ export const NewProjectModal = ({ isOpen, onClose }) => {
             </button>
             <button
               type="submit"
+              disabled={saving}
               className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-lg shadow-md shadow-indigo-600/20"
             >
-              Create Project
+              {saving ? 'Saving...' : 'Create Project'}
             </button>
           </div>
         </form>

@@ -43,7 +43,7 @@ export const AssetLibraryPage = () => {
       {/* Page Header */}
       <PageHeader
         title="Smart Asset Manager"
-        metaChip={`IndexedDB & Server Storage`}
+        metaChip={`Persistent Local Server Storage`}
         breadcrumbs={[
           { label: 'CreatorAI', path: '/' },
           { label: 'Asset Library' }
@@ -98,7 +98,7 @@ export const AssetLibraryPage = () => {
                 <div className="h-2 bg-border-subtle rounded-full overflow-hidden">
                   <div className="h-full bg-accent w-[35%]" />
                 </div>
-                <span className="text-[10px] text-ink-muted block font-mono">IndexedDB + Server uploads/</span>
+                <span className="text-[10px] text-ink-muted block font-mono">Server-local assets + SQLite metadata</span>
               </div>
             </div>
           </Panel>
@@ -158,7 +158,17 @@ export const AssetLibraryPage = () => {
                             Clip Studio
                           </Button>
                         )}
-                        <Button variant="ghost" size="sm" onClick={() => deleteAsset(asset.id)} icon={Trash2} title="Delete" />
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            if (window.confirm('Delete this asset and its clips, drafts, and exports?')) {
+                              deleteAsset(asset.id);
+                            }
+                          }}
+                          icon={Trash2}
+                          title="Delete asset and related work"
+                        />
                       </td>
                     </tr>
                   ))

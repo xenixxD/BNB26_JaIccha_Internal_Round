@@ -3,6 +3,77 @@ import axios from 'axios';
 const API_BASE = '/api';
 
 export const api = {
+  async getWorkspace() {
+    const [projects, assets, clips] = await Promise.all([
+      axios.get(`${API_BASE}/projects`),
+      axios.get(`${API_BASE}/assets`),
+      axios.get(`${API_BASE}/clips`)
+    ]);
+    return {
+      projects: projects.data,
+      assets: assets.data,
+      clips: clips.data
+    };
+  },
+
+  async createProject(project) {
+    const res = await axios.post(`${API_BASE}/projects`, project);
+    return res.data;
+  },
+
+  async createAsset(asset) {
+    const res = await axios.post(`${API_BASE}/assets`, asset);
+    return res.data;
+  },
+
+  async updateAsset(assetId, updates) {
+    const res = await axios.put(`${API_BASE}/assets/${encodeURIComponent(assetId)}`, updates);
+    return res.data;
+  },
+
+  async deleteAsset(assetId) {
+    const res = await axios.delete(`${API_BASE}/assets/${encodeURIComponent(assetId)}`);
+    return res.data;
+  },
+
+  async createClip(clip) {
+    const res = await axios.post(`${API_BASE}/clips`, clip);
+    return res.data;
+  },
+
+  async updateClip(clipId, updates) {
+    const res = await axios.put(`${API_BASE}/clips/${encodeURIComponent(clipId)}`, updates);
+    return res.data;
+  },
+
+  async saveClipDraft(clipId, clip) {
+    const res = await axios.post(`${API_BASE}/clips/${encodeURIComponent(clipId)}/drafts`, clip);
+    return res.data;
+  },
+
+  async getClipDrafts(clipId) {
+    const res = await axios.get(`${API_BASE}/clips/${encodeURIComponent(clipId)}/drafts`);
+    return res.data;
+  },
+
+  async getProjectState(projectId) {
+    const res = await axios.get(`${API_BASE}/projects/${encodeURIComponent(projectId)}/state`);
+    return res.data;
+  },
+
+  async getProjectOutputs(projectId) {
+    const res = await axios.get(`${API_BASE}/projects/${encodeURIComponent(projectId)}/outputs`);
+    return res.data;
+  },
+
+  async saveProjectState(projectId, stateKey, data) {
+    const res = await axios.put(
+      `${API_BASE}/projects/${encodeURIComponent(projectId)}/state/${encodeURIComponent(stateKey)}`,
+      { data }
+    );
+    return res.data;
+  },
+
   async getSystemHealth() {
     try {
       const res = await axios.get(`${API_BASE}/health`, { timeout: 3000 });
@@ -19,27 +90,21 @@ export const api = {
   },
 
   async uploadAsset(file, projectId = 'proj_1', fileType = 'video', onProgress) {
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('project_id', projectId);
-      formData.append('file_type', fileType);
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('project_id', projectId);
+    formData.append('file_type', fileType);
 
-      const res = await axios.post(`${API_BASE}/assets/upload`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        timeout: 60000,
-        onUploadProgress: (progressEvent) => {
-          if (onProgress && progressEvent.total) {
-            const pct = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-            onProgress(pct);
-          }
+    const res = await axios.post(`${API_BASE}/assets/upload`, formData, {
+      timeout: 60000,
+      onUploadProgress: (progressEvent) => {
+        if (onProgress && progressEvent.total) {
+          const pct = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+          onProgress(pct);
         }
-      });
-      return res.data;
-    } catch (err) {
-      console.warn('Backend upload server error:', err);
-      throw err;
-    }
+      }
+    });
+    return res.data;
   },
 
   async analyzePotential(assetId) {
@@ -96,10 +161,11 @@ export const api = {
     }
   },
 
-  async trimClip(assetId, videoUrl, startTime, endTime, aspectRatio = '9:16') {
+  async trimClip(assetId, videoUrl, startTime, endTime, aspectRatio = '9:16', clipId) {
     try {
       const res = await axios.post(`${API_BASE}/clips/trim`, {
         asset_id: assetId,
+        clip_id: clipId,
         video_url: videoUrl,
         start_time: startTime,
         end_time: endTime,

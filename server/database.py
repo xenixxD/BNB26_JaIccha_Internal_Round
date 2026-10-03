@@ -2,14 +2,22 @@ import json
 import os
 import sqlite3
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "creatorai.db")
+try:
+    from local_storage import DATA_DIR, migrate_legacy_local_data
+except ModuleNotFoundError:
+    from server.local_storage import DATA_DIR, migrate_legacy_local_data
+
+migrate_legacy_local_data()
+DB_PATH = os.path.join(DATA_DIR, "creatorai.db")
 
 
 def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
@@ -22,9 +30,11 @@ def init_db() -> None:
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 description TEXT,
+                content_goal TEXT,
                 category TEXT,
                 target_platforms TEXT,
                 created_at TEXT NOT NULL,
+                updated_at TEXT,
                 status TEXT NOT NULL DEFAULT 'Active',
                 thumbnail TEXT,
                 assets_count INTEGER NOT NULL DEFAULT 0,
@@ -33,6 +43,14 @@ def init_db() -> None:
             )
             """
         )
+
+        project_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(projects)").fetchall()
+        }
+        if "content_goal" not in project_columns:
+            conn.execute("ALTER TABLE projects ADD COLUMN content_goal TEXT")
+        if "updated_at" not in project_columns:
+            conn.execute("ALTER TABLE projects ADD COLUMN updated_at TEXT")
 
         conn.execute(
             """
@@ -89,6 +107,58 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS app_state (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS project_state (
+                project_id TEXT NOT NULL,
+                state_key TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (project_id, state_key),
+                FOREIGN KEY(project_id) REFERENCES projects(id)
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS clip_drafts (
+                id TEXT PRIMARY KEY,
+                clip_id TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                version INTEGER NOT NULL,
+                parent_id TEXT,
+                created_at TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                UNIQUE (clip_id, version),
+                FOREIGN KEY(clip_id) REFERENCES clips(id),
+                FOREIGN KEY(project_id) REFERENCES projects(id),
+                FOREIGN KEY(parent_id) REFERENCES clip_drafts(id)
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS outputs (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                asset_id TEXT NOT NULL,
+                clip_id TEXT NOT NULL,
+                draft_id TEXT,
+                filename TEXT NOT NULL,
+                url TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                metadata TEXT NOT NULL DEFAULT '{}',
+                FOREIGN KEY(project_id) REFERENCES projects(id),
+                FOREIGN KEY(asset_id) REFERENCES assets(id),
+                FOREIGN KEY(clip_id) REFERENCES clips(id),
+                FOREIGN KEY(draft_id) REFERENCES clip_drafts(id)
             )
             """
         )
@@ -313,14 +383,18 @@ def list_projects() -> List[Dict[str, Any]]:
 
 def create_project(payload: Dict[str, Any]) -> Dict[str, Any]:
     project_id = payload.get("id") or f"proj_{uuid.uuid4().hex[:12]}"
-    created_at = payload.get("createdAt") or payload.get("created_at") or __import__("datetime").datetime.utcnow().strftime("%Y-%m-%d")
+    created_at = payload.get("createdAt") or payload.get("created_at") or datetime.now(
+        timezone.utc
+    ).strftime("%Y-%m-%d")
     project = {
         "id": project_id,
         "name": payload.get("name") or "New Project",
         "description": payload.get("description") or "",
+        "content_goal": payload.get("contentGoal") or payload.get("content_goal") or "",
         "category": payload.get("category") or "General",
         "target_platforms": payload.get("targetPlatforms") or payload.get("target_platforms") or [],
         "created_at": created_at,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
         "status": payload.get("status") or "Active",
         "thumbnail": payload.get("thumbnail") or "",
         "assets_count": int(payload.get("assetsCount") or 0),
@@ -332,16 +406,20 @@ def create_project(payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         conn.execute(
             """
-            INSERT INTO projects (id, name, description, category, target_platforms, created_at, status, thumbnail, assets_count, clips_count, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO projects (
+                id, name, description, content_goal, category, target_platforms, created_at,
+                updated_at, status, thumbnail, assets_count, clips_count, metadata
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 project["id"],
                 project["name"],
                 project["description"],
+                project["content_goal"],
                 project["category"],
                 json.dumps(project["target_platforms"]),
                 project["created_at"],
+                project["updated_at"],
                 project["status"],
                 project["thumbnail"],
                 project["assets_count"],
@@ -350,7 +428,9 @@ def create_project(payload: Dict[str, Any]) -> Dict[str, Any]:
             ),
         )
         conn.commit()
-        return project
+        return project_to_dict(conn.execute(
+            "SELECT * FROM projects WHERE id = ?", (project_id,)
+        ).fetchone())
     finally:
         conn.close()
 
@@ -378,7 +458,9 @@ def create_asset(payload: Dict[str, Any]) -> Dict[str, Any]:
         "file_type": payload.get("fileType") or payload.get("file_type") or "video",
         "file_size": int(payload.get("fileSize") or payload.get("file_size") or 0),
         "url": payload.get("url") or "#",
-        "upload_date": payload.get("uploadDate") or payload.get("upload_date") or __import__("datetime").datetime.utcnow().strftime("%Y-%m-%d"),
+        "upload_date": payload.get("uploadDate") or payload.get("upload_date") or datetime.now(
+            timezone.utc
+        ).strftime("%Y-%m-%d"),
         "duration": payload.get("duration"),
         "status": payload.get("status") or "ready",
         "content": payload.get("content"),
@@ -388,6 +470,10 @@ def create_asset(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     conn = get_connection()
     try:
+        if not conn.execute(
+            "SELECT 1 FROM projects WHERE id = ?", (asset["project_id"],)
+        ).fetchone():
+            raise ValueError(f"Project not found: {asset['project_id']}")
         conn.execute(
             """
             INSERT INTO assets (
@@ -410,11 +496,100 @@ def create_asset(payload: Dict[str, Any]) -> Dict[str, Any]:
             ),
         )
         conn.execute(
-            "UPDATE projects SET assets_count = assets_count + 1 WHERE id = ?",
-            (asset["project_id"],),
+            "UPDATE projects SET assets_count = assets_count + 1, updated_at = ? WHERE id = ?",
+            (
+                datetime.now(timezone.utc).isoformat(),
+                asset["project_id"],
+            ),
         )
         conn.commit()
-        return asset
+        return asset_to_dict(conn.execute(
+            "SELECT * FROM assets WHERE id = ?", (asset["id"],)
+        ).fetchone())
+    finally:
+        conn.close()
+
+
+def update_asset(asset_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)).fetchone()
+        if not row:
+            raise ValueError(f"Asset not found: {asset_id}")
+        if "duration" in payload:
+            conn.execute(
+                "UPDATE assets SET duration = ? WHERE id = ?",
+                (payload["duration"], asset_id),
+            )
+        conn.commit()
+        return asset_to_dict(conn.execute(
+            "SELECT * FROM assets WHERE id = ?", (asset_id,)
+        ).fetchone())
+    finally:
+        conn.close()
+
+
+def delete_asset(asset_id: str) -> Dict[str, Any]:
+    conn = get_connection()
+    try:
+        asset = conn.execute(
+            "SELECT id, project_id, url FROM assets WHERE id = ?",
+            (asset_id,),
+        ).fetchone()
+        if not asset:
+            raise ValueError(f"Asset not found: {asset_id}")
+
+        clip_rows = conn.execute(
+            "SELECT id FROM clips WHERE asset_id = ?",
+            (asset_id,),
+        ).fetchall()
+        clip_ids = [row["id"] for row in clip_rows]
+        output_rows = conn.execute(
+            "SELECT url FROM outputs WHERE asset_id = ?",
+            (asset_id,),
+        ).fetchall()
+        output_urls = [row["url"] for row in output_rows]
+        conn.execute("DELETE FROM outputs WHERE asset_id = ?", (asset_id,))
+
+        if clip_ids:
+            placeholders = ",".join("?" for _ in clip_ids)
+            draft_rows = conn.execute(
+                f"""
+                SELECT id FROM clip_drafts
+                WHERE clip_id IN ({placeholders})
+                ORDER BY version DESC
+                """,
+                clip_ids,
+            ).fetchall()
+            for draft in draft_rows:
+                conn.execute("DELETE FROM clip_drafts WHERE id = ?", (draft["id"],))
+        conn.execute("DELETE FROM clips WHERE asset_id = ?", (asset_id,))
+        conn.execute("DELETE FROM assets WHERE id = ?", (asset_id,))
+        conn.execute(
+            """
+            UPDATE projects SET
+                assets_count = MAX(assets_count - 1, 0),
+                clips_count = MAX(clips_count - ?, 0),
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                len(clip_ids),
+                datetime.now(timezone.utc).isoformat(),
+                asset["project_id"],
+            ),
+        )
+        conn.commit()
+        return {
+            "asset_id": asset_id,
+            "project_id": asset["project_id"],
+            "asset_url": asset["url"],
+            "clip_ids": clip_ids,
+            "output_urls": output_urls,
+        }
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -466,6 +641,15 @@ def create_clip(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     conn = get_connection()
     try:
+        if not conn.execute(
+            "SELECT 1 FROM projects WHERE id = ?", (clip["project_id"],)
+        ).fetchone():
+            raise ValueError(f"Project not found: {clip['project_id']}")
+        if clip["asset_id"] and not conn.execute(
+            "SELECT 1 FROM assets WHERE id = ? AND project_id = ?",
+            (clip["asset_id"], clip["project_id"]),
+        ).fetchone():
+            raise ValueError(f"Asset not found in project: {clip['asset_id']}")
         conn.execute(
             """
             INSERT INTO clips (
@@ -499,11 +683,267 @@ def create_clip(payload: Dict[str, Any]) -> Dict[str, Any]:
             ),
         )
         conn.execute(
-            "UPDATE projects SET clips_count = clips_count + 1 WHERE id = ?",
-            (clip["project_id"],),
+            "UPDATE projects SET clips_count = clips_count + 1, updated_at = ? WHERE id = ?",
+            (
+                datetime.now(timezone.utc).isoformat(),
+                clip["project_id"],
+            ),
         )
         conn.commit()
-        return clip
+        return clip_to_dict(conn.execute(
+            "SELECT * FROM clips WHERE id = ?", (clip["id"],)
+        ).fetchone())
+    finally:
+        conn.close()
+
+
+CLIP_FIELDS = {
+    "title": ("title",),
+    "start_time": ("startTime", "start_time"),
+    "end_time": ("endTime", "end_time"),
+    "duration": ("duration",),
+    "aspect_ratio": ("aspectRatio", "aspect_ratio"),
+    "potential_score": ("potentialScore", "potential_score"),
+    "rating_label": ("ratingLabel", "rating_label"),
+    "suggested_hook": ("suggestedHook", "suggested_hook"),
+    "hooks": ("hooks",),
+    "selected_hook_index": ("selectedHookIndex", "selected_hook_index"),
+    "caption": ("caption",),
+    "hashtags": ("hashtags",),
+    "subtitles": ("subtitles",),
+    "status": ("status",),
+    "scheduled_date": ("scheduledDate", "scheduled_date"),
+    "platform": ("platform",),
+    "exported_url": ("exportedUrl", "exported_url"),
+}
+JSON_CLIP_FIELDS = {"hooks", "hashtags", "subtitles"}
+
+
+def _merge_clip_payload(existing: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
+    merged = {
+        field: next(
+            (existing[alias] for alias in aliases if alias in existing),
+            None,
+        )
+        for field, aliases in CLIP_FIELDS.items()
+    }
+    for field, aliases in CLIP_FIELDS.items():
+        for alias in aliases:
+            if alias in payload:
+                merged[field] = payload[alias]
+                break
+    if "start_time" in payload or "startTime" in payload:
+        merged["start_time"] = float(merged["start_time"])
+    if "end_time" in payload or "endTime" in payload:
+        merged["end_time"] = float(merged["end_time"])
+    if "duration" in payload:
+        merged["duration"] = float(payload["duration"])
+    elif "start_time" in payload or "startTime" in payload or "end_time" in payload or "endTime" in payload:
+        merged["duration"] = max(merged["end_time"] - merged["start_time"], 0.0)
+    if merged["start_time"] < 0 or merged["end_time"] <= merged["start_time"]:
+        raise ValueError("Clip end time must be greater than a non-negative start time")
+    return merged
+
+
+def update_clip(clip_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT * FROM clips WHERE id = ?", (clip_id,)).fetchone()
+        if not row:
+            raise ValueError(f"Clip not found: {clip_id}")
+        merged = _merge_clip_payload(clip_to_dict(row), payload)
+        assignments = ", ".join(f"{field} = ?" for field in CLIP_FIELDS)
+        values = []
+        for field in CLIP_FIELDS:
+            value = merged[field]
+            values.append(json.dumps(value) if field in JSON_CLIP_FIELDS else value)
+        conn.execute(
+            f"UPDATE clips SET {assignments} WHERE id = ?",
+            (*values, clip_id),
+        )
+        conn.commit()
+        updated = conn.execute("SELECT * FROM clips WHERE id = ?", (clip_id,)).fetchone()
+        return clip_to_dict(updated)
+    finally:
+        conn.close()
+
+
+def save_clip_draft(clip_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT * FROM clips WHERE id = ?", (clip_id,)).fetchone()
+        if not row:
+            raise ValueError(f"Clip not found: {clip_id}")
+        merged = _merge_clip_payload(clip_to_dict(row), payload)
+        latest = conn.execute(
+            "SELECT id, version FROM clip_drafts WHERE clip_id = ? ORDER BY version DESC LIMIT 1",
+            (clip_id,),
+        ).fetchone()
+        version = latest["version"] + 1 if latest else 1
+        draft_id = f"draft_{uuid.uuid4().hex}"
+        created_at = datetime.now(timezone.utc).isoformat()
+        snapshot = {**merged, "id": clip_id, "projectId": row["project_id"], "assetId": row["asset_id"]}
+        conn.execute(
+            """
+            INSERT INTO clip_drafts (id, clip_id, project_id, version, parent_id, created_at, payload)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                draft_id,
+                clip_id,
+                row["project_id"],
+                version,
+                latest["id"] if latest else None,
+                created_at,
+                json.dumps(snapshot),
+            ),
+        )
+        assignments = ", ".join(f"{field} = ?" for field in CLIP_FIELDS)
+        values = []
+        for field in CLIP_FIELDS:
+            value = merged[field]
+            values.append(json.dumps(value) if field in JSON_CLIP_FIELDS else value)
+        conn.execute(
+            f"UPDATE clips SET {assignments} WHERE id = ?",
+            (*values, clip_id),
+        )
+        updated = conn.execute("SELECT * FROM clips WHERE id = ?", (clip_id,)).fetchone()
+        snapshot = clip_to_dict(updated)
+        snapshot["id"] = clip_id
+        snapshot["projectId"] = row["project_id"]
+        snapshot["assetId"] = row["asset_id"]
+        conn.commit()
+        return {
+            "id": draft_id,
+            "clip_id": clip_id,
+            "project_id": row["project_id"],
+            "version": version,
+            "parent_id": latest["id"] if latest else None,
+            "created_at": created_at,
+            "payload": snapshot,
+        }
+    finally:
+        conn.close()
+
+
+def list_clip_drafts(clip_id: str) -> List[Dict[str, Any]]:
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM clip_drafts WHERE clip_id = ? ORDER BY version ASC",
+            (clip_id,),
+        ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "clip_id": row["clip_id"],
+                "project_id": row["project_id"],
+                "version": row["version"],
+                "parent_id": row["parent_id"],
+                "created_at": row["created_at"],
+                "payload": json.loads(row["payload"]),
+            }
+            for row in rows
+        ]
+    finally:
+        conn.close()
+
+
+def save_project_state(project_id: str, state_key: str, payload: Any) -> Dict[str, Any]:
+    updated_at = datetime.now(timezone.utc).isoformat()
+    conn = get_connection()
+    try:
+        if not conn.execute("SELECT 1 FROM projects WHERE id = ?", (project_id,)).fetchone():
+            raise ValueError(f"Project not found: {project_id}")
+        conn.execute(
+            """
+            INSERT INTO project_state (project_id, state_key, payload, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(project_id, state_key) DO UPDATE SET
+                payload = excluded.payload,
+                updated_at = excluded.updated_at
+            """,
+            (project_id, state_key, json.dumps(payload), updated_at),
+        )
+        conn.commit()
+        return {"project_id": project_id, "state_key": state_key, "updated_at": updated_at}
+    finally:
+        conn.close()
+
+
+def get_project_state(project_id: str) -> Dict[str, Any]:
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT state_key, payload, updated_at FROM project_state WHERE project_id = ?",
+            (project_id,),
+        ).fetchall()
+        return {
+            row["state_key"]: {
+                "data": json.loads(row["payload"]),
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        }
+    finally:
+        conn.close()
+
+
+def create_output(payload: Dict[str, Any]) -> Dict[str, Any]:
+    output = {
+        "id": payload.get("id") or f"output_{uuid.uuid4().hex}",
+        "project_id": payload["project_id"],
+        "asset_id": payload["asset_id"],
+        "clip_id": payload["clip_id"],
+        "draft_id": payload.get("draft_id"),
+        "filename": payload["filename"],
+        "url": payload["url"],
+        "file_size": int(payload["file_size"]),
+        "created_at": payload.get("created_at") or datetime.now(timezone.utc).isoformat(),
+        "metadata": payload.get("metadata") or {},
+    }
+    conn = get_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO outputs (
+                id, project_id, asset_id, clip_id, draft_id, filename, url, file_size, created_at, metadata
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                output["id"], output["project_id"], output["asset_id"], output["clip_id"],
+                output["draft_id"], output["filename"], output["url"], output["file_size"],
+                output["created_at"], json.dumps(output["metadata"]),
+            ),
+        )
+        conn.commit()
+        return output
+    finally:
+        conn.close()
+
+
+def list_outputs(project_id: str) -> List[Dict[str, Any]]:
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM outputs WHERE project_id = ? ORDER BY created_at DESC",
+            (project_id,),
+        ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "project_id": row["project_id"],
+                "asset_id": row["asset_id"],
+                "clip_id": row["clip_id"],
+                "draft_id": row["draft_id"],
+                "filename": row["filename"],
+                "url": row["url"],
+                "file_size": row["file_size"],
+                "created_at": row["created_at"],
+                "metadata": json.loads(row["metadata"] or "{}"),
+            }
+            for row in rows
+        ]
     finally:
         conn.close()
 
@@ -513,9 +953,11 @@ def project_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
         "id": row["id"],
         "name": row["name"],
         "description": row["description"],
+        "contentGoal": row["content_goal"] or "",
         "category": row["category"],
         "targetPlatforms": json.loads(row["target_platforms"] or "[]"),
         "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"] or row["created_at"],
         "status": row["status"],
         "thumbnail": row["thumbnail"],
         "assetsCount": row["assets_count"],
@@ -569,5 +1011,4 @@ def clip_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
 
 
 init_db()
-seed_default_data()
 seed_default_data()

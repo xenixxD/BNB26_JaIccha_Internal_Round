@@ -1,11 +1,13 @@
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
 import { INITIAL_PROJECTS, INITIAL_ASSETS, INITIAL_TRANSCRIPT, INITIAL_CLIPS } from '../data/mockData';
 import { api } from '../services/api';
 
-export const useStore = create(
-  persist(
-    (set, get) => ({
+export const useStore = create((set, get) => ({
+      workspaceReady: false,
+      workspaceLoadFailed: false,
+      workspaceError: null,
+      draftVersions: [],
+      outputs: [],
       systemHealth: {
         status: 'checking',
         ffmpeg_available: false,
@@ -40,108 +42,225 @@ export const useStore = create(
 
       setSearchQuery: (query) => set({ searchQuery: query }),
 
+      hydrateWorkspace: async () => {
+        try {
+          const workspace = await api.getWorkspace();
+          const activeProjectId = workspace.projects.some((project) => project.id === get().activeProjectId)
+            ? get().activeProjectId
+            : workspace.projects[0]?.id;
+          const activeClipId = workspace.clips.some((clip) => clip.id === get().activeClipId)
+            ? get().activeClipId
+            : workspace.clips[0]?.id;
+          const savedState = activeProjectId ? await api.getProjectState(activeProjectId) : {};
+          set({
+            projects: workspace.projects,
+            assets: workspace.assets,
+            clips: workspace.clips,
+            activeProjectId,
+            activeClipId,
+            transcript: savedState.transcript?.data || INITIAL_TRANSCRIPT,
+            candidateMoments: savedState.candidateMoments?.data || [],
+            scriptMatches: savedState.scriptMatches?.data || [],
+            retentionAnalysis: savedState.retentionAnalysis?.data || null,
+            abHookVariations: savedState.abHookVariations?.data || [],
+            workspaceReady: true,
+            workspaceLoadFailed: false,
+            workspaceError: null
+          });
+          if (activeProjectId) {
+            set({ outputs: await api.getProjectOutputs(activeProjectId) });
+          }
+        } catch (error) {
+          set({
+            workspaceReady: true,
+            workspaceLoadFailed: true,
+            workspaceError: `Could not load locally persisted workspace: ${error.message}`
+          });
+        }
+      },
+
+      loadProjectState: async (projectId) => {
+        try {
+          const savedState = await api.getProjectState(projectId);
+          set({
+            transcript: savedState.transcript?.data || INITIAL_TRANSCRIPT,
+            candidateMoments: savedState.candidateMoments?.data || [],
+            scriptMatches: savedState.scriptMatches?.data || [],
+            retentionAnalysis: savedState.retentionAnalysis?.data || null,
+            abHookVariations: savedState.abHookVariations?.data || [],
+            outputs: await api.getProjectOutputs(projectId),
+            workspaceError: null
+          });
+        } catch (error) {
+          set({ workspaceError: `Could not load saved project data: ${error.message}` });
+        }
+      },
+
+      persistProjectState: async (stateKey, data) => {
+        const projectId = get().activeProjectId;
+        if (!projectId) return;
+        try {
+          await api.saveProjectState(projectId, stateKey, data);
+          set({ workspaceError: null });
+        } catch (error) {
+          set({ workspaceError: `Could not persist ${stateKey}: ${error.message}` });
+        }
+      },
+
       fetchSystemHealth: async () => {
         const health = await api.getSystemHealth();
         set({ systemHealth: health });
       },
 
-      setActiveProject: (id) => set({ activeProjectId: id }),
+      setActiveProject: (id) => {
+        set({ activeProjectId: id });
+        get().loadProjectState(id);
+      },
       setActiveClip: (id) => set({ activeClipId: id }),
 
-      createProject: (projectData) => {
-        const newProj = {
-          id: `proj_${Date.now().toString(36)}`,
-          createdAt: new Date().toISOString().split('T')[0],
-          status: 'Active',
-          thumbnail: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=600&auto=format&fit=crop&q=80',
-          assetsCount: 0,
-          clipsCount: 0,
-          ...projectData
-        };
-        set((state) => ({
-          projects: [newProj, ...state.projects],
-          activeProjectId: newProj.id
-        }));
-        return newProj;
+      createProject: async (projectData) => {
+        try {
+          const newProject = await api.createProject(projectData);
+          set((state) => ({
+            projects: [newProject, ...state.projects.filter((project) => project.id !== newProject.id)],
+            activeProjectId: newProject.id,
+            transcript: INITIAL_TRANSCRIPT,
+            candidateMoments: [],
+            scriptMatches: [],
+            retentionAnalysis: null,
+            abHookVariations: [],
+            outputs: [],
+            workspaceError: null
+          }));
+          return newProject;
+        } catch (error) {
+          set({ workspaceError: `Could not save project: ${error.message}` });
+          throw error;
+        }
       },
 
-      addAsset: (assetData) => {
+      addAsset: async (assetData, alreadyPersisted = false) => {
         const fileType = assetData.fileType || assetData.file_type || 'video';
         const projectId = assetData.projectId || assetData.project_id || get().activeProjectId;
-        const fileSize = assetData.fileSize || assetData.file_size || 0;
-        const uploadDate = assetData.uploadDate || assetData.upload_date || new Date().toISOString().split('T')[0];
-
-        const newAsset = {
-          id: assetData.id || `asset_${Date.now().toString(36)}`,
-          projectId: projectId,
-          project_id: projectId,
-          filename: assetData.filename,
-          fileType: fileType,
-          file_type: fileType,
-          fileSize: fileSize,
-          file_size: fileSize,
-          url: assetData.url,
-          uploadDate: uploadDate,
-          upload_date: uploadDate,
-          duration: assetData.duration || 160.0,
-          status: 'ready',
-          isDemo: assetData.isDemo !== undefined ? assetData.isDemo : false,
-          content: assetData.content
-        };
-
-        let newClip = null;
-        if (fileType === 'video') {
-          const cleanName = newAsset.filename.replace(/\.[^/.]+$/, "");
-          newClip = {
-            id: `clip_${Date.now().toString(36)}`,
-            projectId: newAsset.projectId,
-            assetId: newAsset.id,
-            title: `Clip: ${cleanName}`,
-            startTime: 0.0,
-            endTime: Math.min(30.0, newAsset.duration || 30.0),
-            duration: Math.min(30.0, newAsset.duration || 30.0),
-            aspectRatio: '9:16',
-            potentialScore: 94.0,
-            ratingLabel: 'High Potential',
-            suggestedHook: `Key takeaway from ${cleanName}...`,
-            hooks: [
-              `🔥 Key takeaway from ${cleanName}`,
-              `💡 Watch this workflow strategy...`
-            ],
-            selectedHookIndex: 0,
-            caption: `Uploaded footage segment: "${newAsset.filename}"\n\nFollow for more updates!`,
-            hashtags: ['#CreatorAI', '#Shorts', '#Reels'],
-            subtitles: [
-              { id: 1, start: 0.0, end: 4.0, text: `Segment from ${cleanName}` }
-            ],
-            status: 'Draft',
-            platform: 'Instagram Reels',
-            exportedUrl: null
+        try {
+          const savedAsset = alreadyPersisted ? assetData : await api.createAsset({ ...assetData, projectId });
+          const newAsset = {
+            ...savedAsset,
+            projectId: savedAsset.projectId || savedAsset.project_id || projectId,
+            project_id: savedAsset.project_id || savedAsset.projectId || projectId,
+            fileType: savedAsset.fileType || savedAsset.file_type || fileType,
+            file_type: savedAsset.file_type || savedAsset.fileType || fileType,
+            fileSize: savedAsset.fileSize || savedAsset.file_size || 0,
+            file_size: savedAsset.file_size || savedAsset.fileSize || 0,
+            uploadDate: savedAsset.uploadDate || savedAsset.upload_date,
+            upload_date: savedAsset.upload_date || savedAsset.uploadDate,
+            isDemo: savedAsset.isDemo ?? false
           };
-        }
+          set((state) => ({
+            assets: [newAsset, ...state.assets.filter((asset) => asset.id !== newAsset.id)],
+            projects: state.projects.map((project) =>
+              project.id === newAsset.projectId
+                ? { ...project, assetsCount: (project.assetsCount || 0) + 1 }
+                : project
+            ),
+            workspaceError: null
+          }));
 
-        set((state) => ({
-          assets: [newAsset, ...state.assets],
-          clips: newClip ? [newClip, ...state.clips] : state.clips,
-          activeClipId: newClip ? newClip.id : state.activeClipId,
-          projects: state.projects.map((p) =>
-            p.id === newAsset.projectId ? { ...p, assetsCount: (p.assetsCount || 0) + 1, clipsCount: newClip ? (p.clipsCount || 0) + 1 : p.clipsCount } : p
-          )
-        }));
-        return newAsset;
+          if (fileType === 'video') {
+            const cleanName = newAsset.filename.replace(/\.[^/.]+$/, '');
+            const clip = await api.createClip({
+              projectId: newAsset.projectId,
+              assetId: newAsset.id,
+              title: `Clip: ${cleanName}`,
+              startTime: 0,
+              endTime: Math.min(30, newAsset.duration || 30),
+              aspectRatio: '9:16',
+              potentialScore: 94,
+              ratingLabel: 'High Potential',
+              suggestedHook: `Key takeaway from ${cleanName}...`,
+              hooks: [`Key takeaway from ${cleanName}`, 'Watch this workflow strategy...'],
+              selectedHookIndex: 0,
+              caption: `Uploaded footage segment: "${newAsset.filename}"`,
+              hashtags: ['#CreatorAI', '#Shorts', '#Reels'],
+              subtitles: [],
+              status: 'Draft',
+              platform: 'Instagram Reels'
+            });
+            set((state) => ({
+              clips: [clip, ...state.clips.filter((item) => item.id !== clip.id)],
+              activeClipId: clip.id,
+              projects: state.projects.map((project) =>
+                project.id === clip.projectId
+                  ? { ...project, clipsCount: (project.clipsCount || 0) + 1 }
+                  : project
+              )
+            }));
+          }
+          return newAsset;
+        } catch (error) {
+          set({ workspaceError: `Could not persist asset: ${error.message}` });
+          throw error;
+        }
       },
 
-      updateAssetDuration: (assetId, duration) => {
+      updateAssetDuration: async (assetId, duration) => {
         const dur = round(duration, 1);
+        const previousDuration = get().assets.find((asset) => asset.id === assetId)?.duration;
         set((state) => ({
           assets: state.assets.map((a) => (a.id === assetId ? { ...a, duration: dur } : a))
         }));
+        try {
+          await api.updateAsset(assetId, { duration: dur });
+          set({ workspaceError: null });
+        } catch (error) {
+          set((state) => ({
+            assets: state.assets.map((asset) =>
+              asset.id === assetId
+                ? { ...asset, duration: previousDuration }
+                : asset
+            ),
+            workspaceError: `Could not save asset duration: ${error.message}`
+          }));
+        }
       },
 
-      deleteAsset: (assetId) => {
-        set((state) => ({
-          assets: state.assets.filter((a) => a.id !== assetId)
-        }));
+      deleteAsset: async (assetId) => {
+        try {
+          const deleted = await api.deleteAsset(assetId);
+          set((state) => {
+            const remainingClips = state.clips.filter(
+              (clip) => !deleted.clip_ids.includes(clip.id)
+            );
+            return {
+              assets: state.assets.filter((asset) => asset.id !== assetId),
+              clips: remainingClips,
+              projects: state.projects.map((project) =>
+                project.id === deleted.project_id
+                  ? {
+                      ...project,
+                      assetsCount: Math.max((project.assetsCount || 0) - 1, 0),
+                      clipsCount: Math.max(
+                        (project.clipsCount || 0) - deleted.clip_ids.length,
+                        0
+                      )
+                    }
+                  : project
+              ),
+              activeClipId: deleted.clip_ids.includes(state.activeClipId)
+                ? remainingClips[0]?.id
+                : state.activeClipId,
+              draftVersions: state.draftVersions.filter(
+                (draft) => !deleted.clip_ids.includes(draft.clip_id)
+              ),
+              outputs: state.outputs.filter((output) => output.asset_id !== assetId),
+              workspaceError: deleted.warnings.length
+                ? deleted.warnings.join(' ')
+                : null
+            };
+          });
+        } catch (error) {
+          set({ workspaceError: `Could not delete asset: ${error.message}` });
+        }
       },
 
       clearAnalysisState: () => {
@@ -154,11 +273,22 @@ export const useStore = create(
       },
 
       runPotentialAnalyzer: async (assetId) => {
+        const cached = get().candidateMoments.filter((candidate) => candidate.assetId === assetId);
+        if (cached.length) return cached;
         const targetAsset = get().assets.find((a) => a.id === assetId);
         const response = await api.analyzePotential(assetId);
         if (response && response.candidates && response.candidates.length > 0) {
-          set({ candidateMoments: response.candidates });
-          return response.candidates;
+          const candidates = response.candidates.map((candidate) => ({
+            ...candidate,
+            assetId: candidate.assetId || assetId
+          }));
+          const allCandidates = [
+            ...get().candidateMoments.filter((candidate) => candidate.assetId !== assetId),
+            ...candidates
+          ];
+          set({ candidateMoments: allCandidates });
+          await get().persistProjectState('candidateMoments', allCandidates);
+          return candidates;
         }
 
         // Dynamic candidate generator tailored specifically to targetAsset
@@ -234,7 +364,12 @@ export const useStore = create(
           }
         ];
 
-        set({ candidateMoments: candidates });
+        const allCandidates = [
+          ...get().candidateMoments.filter((candidate) => candidate.assetId !== assetId),
+          ...candidates
+        ];
+        set({ candidateMoments: allCandidates });
+        await get().persistProjectState('candidateMoments', allCandidates);
         return candidates;
       },
 
@@ -243,6 +378,7 @@ export const useStore = create(
         const response = await api.analyzeRetention(assetId);
         if (response) {
           set({ retentionAnalysis: response });
+          await get().persistProjectState('retentionAnalysis', response);
           return response;
         }
 
@@ -302,6 +438,7 @@ export const useStore = create(
           methodology_note: "Heuristic prediction based on transcript pacing, pause density, and topic boundaries (Not real platform analytics)."
         };
         set({ retentionAnalysis: fallback });
+        await get().persistProjectState('retentionAnalysis', fallback);
         return fallback;
       },
 
@@ -309,6 +446,7 @@ export const useStore = create(
         const response = await api.generateAbHooks(clipId, segmentText);
         if (response && response.variations) {
           set({ abHookVariations: response.variations });
+          await get().persistProjectState('abHookVariations', response.variations);
           return response.variations;
         }
 
@@ -336,6 +474,7 @@ export const useStore = create(
           }
         ];
         set({ abHookVariations: fallbackVariations });
+        await get().persistProjectState('abHookVariations', fallbackVariations);
         return fallbackVariations;
       },
 
@@ -359,6 +498,7 @@ export const useStore = create(
         const response = await api.matchScript(assetId, scriptText);
         if (response && response.matches) {
           set({ scriptMatches: response.matches });
+          await get().persistProjectState('scriptMatches', response.matches);
           return response.matches;
         }
 
@@ -374,12 +514,12 @@ export const useStore = create(
           }
         ];
         set({ scriptMatches: matches });
+        await get().persistProjectState('scriptMatches', matches);
         return matches;
       },
 
-      generateClip: (candidate) => {
-        const newClip = {
-          id: `clip_${Date.now().toString(36)}`,
+      generateClip: async (candidate) => {
+        const clipData = {
           projectId: get().activeProjectId,
           assetId: candidate.assetId || 'asset_v1',
           title: candidate.title || 'Generated Clip',
@@ -406,16 +546,23 @@ export const useStore = create(
           platform: 'Instagram Reels',
           exportedUrl: null
         };
-
-        set((state) => ({
-          clips: [newClip, ...state.clips],
-          activeClipId: newClip.id,
-          projects: state.projects.map((p) =>
-            p.id === newClip.projectId ? { ...p, clipsCount: (p.clipsCount || 0) + 1 } : p
-          )
-        }));
-
-        return newClip;
+        try {
+          const newClip = await api.createClip(clipData);
+          set((state) => ({
+            clips: [newClip, ...state.clips],
+            activeClipId: newClip.id,
+            projects: state.projects.map((project) =>
+              project.id === newClip.projectId
+                ? { ...project, clipsCount: (project.clipsCount || 0) + 1 }
+                : project
+            ),
+            workspaceError: null
+          }));
+          return newClip;
+        } catch (error) {
+          set({ workspaceError: `Could not save clip: ${error.message}` });
+          throw error;
+        }
       },
 
       updateClip: (clipId, updates) => {
@@ -435,9 +582,59 @@ export const useStore = create(
         }));
       },
 
-      moveClipStatus: (clipId, newStatus) => {
+      moveClipStatus: async (clipId, newStatus) => {
+        const clip = get().clips.find((item) => item.id === clipId);
+        if (!clip) return;
         set((state) => ({
           clips: state.clips.map((c) => (c.id === clipId ? { ...c, status: newStatus } : c))
+        }));
+        try {
+          await api.updateClip(clipId, { status: newStatus });
+          set({ workspaceError: null });
+        } catch (error) {
+          set((state) => ({
+            clips: state.clips.map((item) =>
+              item.id === clipId ? { ...item, status: clip.status } : item
+            ),
+            workspaceError: `Could not save clip status: ${error.message}`
+          }));
+        }
+      },
+
+      saveDraft: async (clipId) => {
+        const clip = get().clips.find((item) => item.id === clipId);
+        if (!clip) throw new Error('Clip not found');
+        try {
+          const draft = await api.saveClipDraft(clipId, clip);
+          set((state) => ({
+            clips: state.clips.map((item) => item.id === clipId ? draft.payload : item),
+            draftVersions: [...state.draftVersions, draft],
+            workspaceError: null
+          }));
+          return draft;
+        } catch (error) {
+          set({ workspaceError: `Could not save draft: ${error.message}` });
+          throw error;
+        }
+      },
+
+      loadDraftVersions: async (clipId) => {
+        try {
+          const draftVersions = await api.getClipDrafts(clipId);
+          set({ draftVersions });
+          return draftVersions;
+        } catch (error) {
+          set({ workspaceError: `Could not load draft history: ${error.message}` });
+          return [];
+        }
+      },
+
+      restoreDraftVersion: (draft) => {
+        set((state) => ({
+          clips: state.clips.map((clip) =>
+            clip.id === draft.clip_id ? draft.payload : clip
+          ),
+          workspaceError: null
         }));
       },
 
@@ -475,7 +672,8 @@ export const useStore = create(
           asset?.url || clip.videoUrl,
           clip.startTime,
           clip.endTime,
-          clip.aspectRatio
+          clip.aspectRatio,
+          clip.id
         );
 
         if (res && res.status === 'completed') {
@@ -484,24 +682,15 @@ export const useStore = create(
               c.id === clipId ? { ...c, exportedUrl: res.output_url, status: 'Ready for Review' } : c
             )
           }));
+          try {
+            set({ outputs: await api.getProjectOutputs(clip.projectId), workspaceError: null });
+          } catch (error) {
+            set({ workspaceError: `Export completed but output metadata could not be reloaded: ${error.message}` });
+          }
         }
         return res;
       }
-    }),
-    {
-      name: 'creator_ai_storage_v1',
-      storage: createJSONStorage(() => localStorage),
-      partialize: (state) => ({
-        projects: state.projects,
-        assets: state.assets.map((a) => ({ ...a, blob: undefined })),
-        clips: state.clips,
-        activeProjectId: state.activeProjectId,
-        activeClipId: state.activeClipId,
-        user: state.user
-      })
-    }
-  )
-);
+    }));
 
 function round(val, decimals) {
   return Number(Math.round(val + 'e' + decimals) + 'e-' + decimals);

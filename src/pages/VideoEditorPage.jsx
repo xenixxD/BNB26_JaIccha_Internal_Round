@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore } from '../store/useStore';
-import { storageService } from '../services/storage';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { Panel } from '../components/ui/Panel';
@@ -47,7 +46,11 @@ export const VideoEditorPage = () => {
     generateAiContentForClip,
     exportClip,
     moveClipStatus,
-    updateAssetDuration
+    updateAssetDuration,
+    saveDraft,
+    loadDraftVersions,
+    restoreDraftVersion,
+    draftVersions
   } = useStore();
 
   const currentClip = clips.find((c) => c.id === activeClipId) || clips[0];
@@ -62,36 +65,16 @@ export const VideoEditorPage = () => {
   const [copiedField, setCopiedField] = useState(null);
   const [leftTab, setLeftTab] = useState('media'); // 'media' | 'captions' | 'audio'
   const [timelineZoom, setTimelineZoom] = useState(100);
+  const [savingDraft, setSavingDraft] = useState(false);
+  const [draftError, setDraftError] = useState('');
 
-  // Resolve video player source (IndexedDB Blob or URL)
   useEffect(() => {
-    let activeObjUrl = null;
-    let isSubscribed = true;
+    setVideoSrc(currentAsset?.url || null);
+  }, [currentAsset?.url]);
 
-    const loadVideoSrc = async () => {
-      if (currentAsset) {
-        try {
-          const blob = await storageService.getBlob(currentAsset.id);
-          if (blob && isSubscribed) {
-            activeObjUrl = URL.createObjectURL(blob);
-            setVideoSrc(activeObjUrl);
-            return;
-          }
-        } catch (e) {
-          console.warn("IndexedDB Blob fetch error in VideoEditor:", e);
-        }
-        if (isSubscribed) {
-          setVideoSrc(currentAsset.url);
-        }
-      }
-    };
-    loadVideoSrc();
-
-    return () => {
-      isSubscribed = false;
-      if (activeObjUrl) URL.revokeObjectURL(activeObjUrl);
-    };
-  }, [currentAsset?.id]);
+  useEffect(() => {
+    if (currentClip) loadDraftVersions(currentClip.id);
+  }, [currentClip?.id]);
 
   useEffect(() => {
     if (videoRef.current && currentClip) {
@@ -130,6 +113,25 @@ export const VideoEditorPage = () => {
     const result = await exportClip(currentClip.id);
     setExporting(false);
     setExportResult(result);
+  };
+
+  const handleSaveDraft = async () => {
+    if (!currentClip || savingDraft) return;
+    setSavingDraft(true);
+    setDraftError('');
+    try {
+      await saveDraft(currentClip.id);
+    } catch (error) {
+      setDraftError(error.message || 'Draft could not be saved.');
+    } finally {
+      setSavingDraft(false);
+    }
+  };
+
+  const handleRestoreDraft = (event) => {
+    const version = Number(event.target.value);
+    const draft = draftVersions.find((item) => item.version === version);
+    if (draft) restoreDraftVersion(draft);
   };
 
   const handleSaveToPlanner = () => {
@@ -172,14 +174,28 @@ export const VideoEditorPage = () => {
             <Button variant="ghost" size="sm" title="Redo"><Redo2 className="w-3.5 h-3.5" /></Button>
           </div>
 
-          <div className="flex items-center gap-1.5 text-micro text-status-success font-mono font-semibold">
+          <div className="flex items-center gap-1.5 text-micro text-ink-muted font-mono font-semibold">
             <span className="w-1.5 h-1.5 rounded-full bg-status-success inline-block"></span>
-            <span>AUTO-SAVED</span>
+            <span>LOCAL DRAFT STORAGE</span>
           </div>
         </div>
 
         {/* Aspect Ratio & Zoom Selector */}
         <div className="flex items-center gap-3">
+          <select
+            aria-label="Saved draft versions"
+            defaultValue=""
+            onChange={handleRestoreDraft}
+            className="h-7 max-w-36 bg-white border border-border-subtle text-xs rounded-btn px-2"
+          >
+            <option value="">Draft history</option>
+            {draftVersions.map((draft) => (
+              <option key={draft.id} value={draft.version}>Version {draft.version}</option>
+            ))}
+          </select>
+          <Button variant="secondary" size="sm" onClick={handleSaveDraft} isLoading={savingDraft}>
+            Save Draft
+          </Button>
           <div className="flex bg-surface-inset p-0.5 rounded-chip border border-border-subtle">
             {[
               { label: '9:16 Vertical', ratio: '9:16', icon: Smartphone },
@@ -202,7 +218,6 @@ export const VideoEditorPage = () => {
               );
             })}
           </div>
-
           <Button variant="secondary" size="sm" onClick={handleSaveToPlanner} icon={Calendar}>
             Save to Planner
           </Button>
@@ -212,6 +227,11 @@ export const VideoEditorPage = () => {
           </Button>
         </div>
       </div>
+      {draftError && (
+        <div role="alert" className="px-4 py-2 bg-rose-50 text-rose-700 text-xs border-b border-rose-200">
+          {draftError}
+        </div>
+      )}
 
       {/* 2. MAIN WORKSPACE (Left Media, Center Preview, Right Inspector) */}
       <div className="flex-1 flex min-h-0 overflow-hidden">

@@ -8,7 +8,6 @@ import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { StatTile } from '../components/ui/StatTile';
 import { UploadAssetModal } from '../components/common/UploadAssetModal';
-import { storageService } from '../services/storage';
 import {
   Sparkles,
   FileCheck,
@@ -42,6 +41,7 @@ export const ClipStudioPage = () => {
     scriptMatches,
     retentionAnalysis,
     abHookVariations,
+    activeProjectId,
     runPotentialAnalyzer,
     runRetentionAnalyzer,
     runAbHookGenerator,
@@ -50,14 +50,18 @@ export const ClipStudioPage = () => {
     generateClip,
     clips,
     activeClipId,
-    updateAssetDuration,
-    clearAnalysisState
+    updateAssetDuration
   } = useStore();
 
   const [activeTab, setActiveTab] = useState('analyzer'); // 'analyzer' | 'retention' | 'hooklab' | 'matcher'
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState(null);
-  const [selectedAssetId, setSelectedAssetId] = useState('asset_v1');
+  const [selectedAssetId, setSelectedAssetId] = useState(() =>
+    assets.find((asset) =>
+      (asset.fileType === 'video' || asset.file_type === 'video') &&
+      (asset.projectId || asset.project_id) === activeProjectId
+    )?.id || 'asset_v1'
+  );
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [videoSrc, setVideoSrc] = useState(null);
@@ -74,40 +78,22 @@ export const ClipStudioPage = () => {
     "If you master hook generation in the first 3 seconds, your retention rate will skyrocket across TikTok and Instagram."
   );
 
-  const videoAssets = assets.filter((a) => a.fileType === 'video' || a.file_type === 'video');
+  const videoAssets = assets.filter((a) =>
+    (a.fileType === 'video' || a.file_type === 'video') &&
+    (a.projectId || a.project_id) === activeProjectId
+  );
   const activeAsset = videoAssets.find((a) => a.id === selectedAssetId) || videoAssets[0];
   const activeClip = clips.find((c) => c.id === activeClipId) || clips[0];
 
-  // Resolve video player source (IndexedDB Blob or URL)
   useEffect(() => {
-    let activeObjUrl = null;
-    let isSubscribed = true;
+    setVideoSrc(activeAsset?.url || null);
+  }, [activeAsset?.url]);
 
-    const loadVideoSrc = async () => {
-      if (activeAsset) {
-        // Try IndexedDB first for uploaded binary Blob
-        try {
-          const blob = await storageService.getBlob(activeAsset.id);
-          if (blob && isSubscribed) {
-            activeObjUrl = URL.createObjectURL(blob);
-            setVideoSrc(activeObjUrl);
-            return;
-          }
-        } catch (e) {
-          console.warn("IndexedDB Blob fetch error", e);
-        }
-        if (isSubscribed) {
-          setVideoSrc(activeAsset.url);
-        }
-      }
-    };
-    loadVideoSrc();
-
-    return () => {
-      isSubscribed = false;
-      if (activeObjUrl) URL.revokeObjectURL(activeObjUrl);
-    };
-  }, [activeAsset?.id]);
+  useEffect(() => {
+    if (videoAssets.length && !videoAssets.some((asset) => asset.id === selectedAssetId)) {
+      setSelectedAssetId(videoAssets[0].id);
+    }
+  }, [activeProjectId, videoAssets, selectedAssetId]);
 
   // When source video changes, reset analysis error state, seek to start, and run potential analysis for selected asset
   useEffect(() => {
@@ -117,10 +103,11 @@ export const ClipStudioPage = () => {
       videoRef.current.currentTime = 0;
     }
     if (selectedAssetId) {
-      clearAnalysisState();
-      runPotentialAnalyzer(selectedAssetId);
+      if (!candidateMoments.some((candidate) => candidate.assetId === selectedAssetId)) {
+        runPotentialAnalyzer(selectedAssetId);
+      }
     }
-  }, [selectedAssetId]);
+  }, [selectedAssetId, candidateMoments]);
 
   useEffect(() => {
     if (activeTab === 'retention' && !retentionAnalysis) {
@@ -130,7 +117,10 @@ export const ClipStudioPage = () => {
     }
   }, [activeTab, selectedAssetId]);
 
-  const moments = candidateMoments.length > 0 ? candidateMoments : [
+  const assetCandidates = candidateMoments.filter(
+    (candidate) => !candidate.assetId || candidate.assetId === activeAsset?.id
+  );
+  const moments = assetCandidates.length > 0 ? assetCandidates : [
     {
       id: 'cand_1',
       title: 'The #1 AI Creator Mistake',
@@ -199,11 +189,15 @@ export const ClipStudioPage = () => {
     setSelectedCandidateIds(topIds);
   };
 
-  const handleBatchGenerate = () => {
+  const handleBatchGenerate = async () => {
     const selected = moments.filter((m) => selectedCandidateIds.includes(m.id));
     if (selected.length > 0) {
-      const clip = generateClip(selected[0]);
-      navigate('/video-editor');
+      try {
+        await generateClip(selected[0]);
+        navigate('/video-editor');
+      } catch (err) {
+        setAnalysisError(err.message || 'Could not save the generated clip.');
+      }
     }
   };
 

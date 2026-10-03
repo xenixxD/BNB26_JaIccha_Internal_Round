@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { useStore } from '../../store/useStore';
 import { api } from '../../services/api';
-import { storageService } from '../../services/storage';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import { X, UploadCloud, FileVideo, FileText, Music, Image as ImageIcon, Loader2, CheckCircle2, AlertTriangle } from 'lucide-react';
@@ -35,36 +34,16 @@ export const UploadAssetModal = ({ isOpen, onClose, onSuccess }) => {
         else if (file.type.startsWith('image/')) type = 'image';
         else if (file.name.endsWith('.txt') || file.name.endsWith('.script')) type = 'script';
 
-        let assetRes;
-        try {
-          // 1. Attempt upload to FastAPI backend endpoint with real-time progress
-          assetRes = await api.uploadAsset(file, activeProjectId, type, (pct) => setProgress(Math.min(90, pct)));
-          assetRes.isDemo = false;
-        } catch (apiErr) {
-          console.warn('Backend upload endpoint offline, storing in local IndexedDB:', apiErr);
-          assetRes = {
-            id: `asset_${Date.now().toString(36)}`,
-            projectId: activeProjectId,
-            project_id: activeProjectId,
-            filename: file.name,
-            fileType: type,
-            file_type: type,
-            fileSize: file.size,
-            file_size: file.size,
-            url: URL.createObjectURL(file),
-            uploadDate: new Date().toISOString().split('T')[0],
-            duration: 160.0,
-            status: 'ready',
-            isDemo: false
-          };
-        }
+        const assetRes = await api.uploadAsset(
+          file,
+          activeProjectId,
+          type,
+          (pct) => setProgress(Math.min(90, pct))
+        );
+        assetRes.isDemo = false;
 
         setProgress(95);
-        // 2. Persist binary Blob in IndexedDB (ensures video survives browser refreshes)
-        await storageService.saveBlob(assetRes.id, file);
-
-        // 3. Register asset in Zustand store
-        addAsset(assetRes);
+        await addAsset(assetRes, true);
         if (onSuccess) {
           onSuccess(assetRes);
         }
@@ -91,30 +70,31 @@ export const UploadAssetModal = ({ isOpen, onClose, onSuccess }) => {
     accept: {
       'video/*': ['.mp4', '.mov', '.webm', '.mkv'],
       'audio/*': ['.mp3', '.wav', '.m4a'],
-      'image/*': ['.jpg', '.png', '.webp'],
-      'text/plain': ['.txt']
+      'image/*': ['.jpg', '.jpeg', '.png', '.webp']
     }
   });
 
-  const handleScriptSubmit = (e) => {
+  const handleScriptSubmit = async (e) => {
     e.preventDefault();
     if (!scriptText.trim()) return;
 
-    addAsset({
-      id: `asset_script_${Date.now().toString(36)}`,
-      projectId: activeProjectId,
-      filename: `User_Script_${new Date().toLocaleTimeString().replace(/:/g, '')}.txt`,
-      fileType: 'script',
-      fileSize: scriptText.length,
-      url: '#',
-      uploadDate: new Date().toISOString().split('T')[0],
-      status: 'ready',
-      isDemo: false,
-      content: scriptText
-    });
-
-    setScriptText('');
-    onClose();
+    try {
+      await addAsset({
+        projectId: activeProjectId,
+        filename: `User_Script_${new Date().toISOString().replace(/[:.]/g, '-')}.txt`,
+        fileType: 'script',
+        fileSize: scriptText.length,
+        url: '',
+        uploadDate: new Date().toISOString().split('T')[0],
+        status: 'ready',
+        isDemo: false,
+        content: scriptText
+      });
+      setScriptText('');
+      onClose();
+    } catch (err) {
+      setErrorMessage(err.message || 'Could not save script to local storage.');
+    }
   };
 
   if (!isOpen) return null;
@@ -183,7 +163,7 @@ export const UploadAssetModal = ({ isOpen, onClose, onSuccess }) => {
                       <Loader2 className="w-10 h-10 text-accent animate-spin" />
                     )}
                     <span className="text-xs font-bold text-ink-primary">
-                      {uploadSuccess ? 'Video Uploaded & Saved to IndexedDB!' : `Uploading file... ${progress}%`}
+                      {uploadSuccess ? 'File saved to local server storage!' : `Uploading file... ${progress}%`}
                     </span>
                     <div className="w-48 h-1.5 bg-border-subtle rounded-full overflow-hidden">
                       <div className="h-full bg-accent transition-all duration-300" style={{ width: `${progress}%` }} />

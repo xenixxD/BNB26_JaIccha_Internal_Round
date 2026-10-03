@@ -4,8 +4,8 @@
 
 - **Frontend Framework**: React 18 + Vite
 - **Routing**: React Router DOM v7
-- **State Management**: Zustand with `localStorage` persistence (`src/store/useStore.js`)
-- **Binary Storage**: IndexedDB via `idb-keyval` (`src/services/storage.js`)
+- **State Management**: Zustand hydrated from the FastAPI local workspace API (`src/store/useStore.js`)
+- **Local Persistence**: SQLite metadata and local media/output files under the configurable server data directory
 - **Backend API**: Python FastAPI (`server/main.py`) with Pydantic schemas, FFmpeg video processing, and NLP AI engines.
 - **Styling**: Tailwind CSS + custom tokens in `tailwind.config.js` and `src/index.css`.
 - **Icons**: Lucide React (`lucide-react`)

@@ -141,6 +141,7 @@ class ContentGenResponse(BaseModel):
 
 class ClipTrimRequest(BaseModel):
     asset_id: str
+    clip_id: Optional[str] = None
     video_url: Optional[str] = None
     start_time: float
     end_time: float
