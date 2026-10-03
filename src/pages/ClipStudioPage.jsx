@@ -77,6 +77,8 @@ export const ClipStudioPage = () => {
   const [copiedHookId, setCopiedHookId] = useState(null);
   const [selectedHookIndex, setSelectedHookIndex] = useState(0);
   const [scriptInput, setScriptInput] = useState('');
+  const [scriptMatching, setScriptMatching] = useState(false);
+  const [scriptMatchError, setScriptMatchError] = useState('');
   const [deletingProject, setDeletingProject] = useState(false);
   const [projectActionError, setProjectActionError] = useState('');
 
@@ -136,6 +138,19 @@ export const ClipStudioPage = () => {
       setAnalysisError("AI Potential Analysis failed for uploaded video. Check API key configuration.");
     } finally {
       setAnalyzing(false);
+    }
+  };
+
+  const handleRunScriptMatcher = async () => {
+    if (!selectedAssetId || !scriptInput.trim()) return;
+    setScriptMatching(true);
+    setScriptMatchError('');
+    try {
+      await runScriptMatcher(selectedAssetId, scriptInput.trim());
+    } catch (error) {
+      setScriptMatchError(error.message || 'Could not match this script to the selected footage.');
+    } finally {
+      setScriptMatching(false);
     }
   };
 
@@ -478,6 +493,66 @@ export const ClipStudioPage = () => {
               })}
             </Panel>
           </div>
+        </div>
+      )}
+
+      {activeTab === 'matcher' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <Panel title="Match your script to footage" className="space-y-4">
+            <p className="text-body-sm text-ink-secondary">
+              Uses timestamped transcription from the selected video. The first run transcribes and saves it locally;
+              later runs reuse the transcript while the source file remains unchanged.
+            </p>
+            <textarea
+              value={scriptInput}
+              onChange={(event) => setScriptInput(event.target.value)}
+              aria-label="Script text"
+              placeholder="Paste or type your script. Separate sections with a blank line for clearer matches."
+              maxLength={20000}
+              rows={12}
+              className="w-full rounded-panel border border-border-subtle bg-white p-3 text-body-sm text-ink-primary outline-none focus:border-accent"
+            />
+            {scriptMatchError && (
+              <div role="alert" className="rounded-btn border border-rose-200 bg-status-danger-soft p-3 text-xs text-status-danger">
+                {scriptMatchError}
+              </div>
+            )}
+            {!activeAsset && (
+              <p className="text-xs text-status-danger">Upload or select a video in this project before matching.</p>
+            )}
+            <Button
+              variant="primary"
+              onClick={handleRunScriptMatcher}
+              disabled={!selectedAssetId || !scriptInput.trim() || scriptMatching}
+              icon={FileCheck}
+            >
+              {scriptMatching ? 'Transcribing and matching…' : 'Transcribe & Find Matches'}
+            </Button>
+          </Panel>
+
+          <Panel title={`Footage matches (${scriptMatches.filter((match) => match.assetId === selectedAssetId).length})`} className="space-y-3">
+            {scriptMatches.filter((match) => match.assetId === selectedAssetId).length === 0 ? (
+              <p className="text-body-sm text-ink-muted">
+                No matches yet. Matches are only shown when transcript evidence overlaps with a script section.
+              </p>
+            ) : scriptMatches
+                .filter((match) => match.assetId === selectedAssetId)
+                .map((match) => (
+                  <article key={match.id} className="rounded-panel border border-border-subtle bg-white p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-xs font-semibold text-ink-primary">
+                        {match.start_time.toFixed(1)}s–{match.end_time.toFixed(1)}s
+                      </span>
+                      <Badge variant="score">{match.confidence_score}% lexical overlap</Badge>
+                    </div>
+                    <p className="text-body-sm text-ink-secondary">{match.matched_transcript_excerpt}</p>
+                    <p className="text-xs text-ink-muted">{match.explanation}</p>
+                    <p className="text-[10px] text-ink-muted">
+                      Transcript evidence: {match.transcriptId}
+                    </p>
+                  </article>
+                ))}
+          </Panel>
         </div>
       )}
 

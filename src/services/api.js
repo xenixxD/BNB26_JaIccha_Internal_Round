@@ -177,11 +177,13 @@ export const api = {
         asset_id: assetId,
         script_text: scriptText,
         provider: provider
-      }, { timeout: 15000 });
+      }, { timeout: 180000 });
       return res.data;
     } catch (err) {
-      console.warn('Using client script match fallback:', err);
-      return null;
+      const detail = err.response?.data?.detail;
+      throw new Error(
+        (typeof detail === 'string' ? detail : detail?.message) || err.message || 'Script matching failed'
+      );
     }
   },
 
@@ -202,19 +204,13 @@ export const api = {
     }
   },
 
-  async transcribeMedia(file) {
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-      const res = await axios.post(`${API_BASE}/ai/transcribe`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        timeout: 120000
-      });
-      return res.data;
-    } catch (err) {
-      console.warn('Groq Whisper transcription failed or offline:', err);
-      return null;
-    }
+  async transcribeMedia(assetId) {
+    const res = await axios.post(
+      `${API_BASE}/assets/${encodeURIComponent(assetId)}/transcript`,
+      {},
+      { timeout: 120000 }
+    );
+    return res.data;
   },
 
   async trimClip(assetId, videoUrl, startTime, endTime, aspectRatio = '9:16', clipId) {

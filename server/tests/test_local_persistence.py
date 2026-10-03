@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 from io import BytesIO
 import os
 import tempfile
@@ -31,6 +32,114 @@ class LocalPersistenceTests(unittest.TestCase):
             database.create_asset({"filename": "source.mp4"})
         with self.assertRaisesRegex(ValueError, "Project ID is required"):
             database.create_clip({"title": "Clip without project"})
+
+    def test_transcript_cache_persists_and_is_invalidated_when_source_changes(self):
+        project = database.create_project({"name": "Transcript persistence"})
+        content = b"\x00\x00\x00\x18ftypisom test media"
+        checksum = hashlib.sha256(content).hexdigest()
+        asset = database.create_asset({
+            "projectId": project["id"],
+            "filename": "source.mp4",
+            "fileType": "video",
+            "url": "/uploads/source.mp4",
+            "checksum": checksum,
+            "mimeType": "video/mp4",
+        })
+        transcript = database.save_transcript(
+            asset_id=asset["id"],
+            source_checksum=checksum,
+            provider="test-provider",
+            model="test-model",
+            text="A grounded transcript.",
+            duration=4,
+            segments=[{"start": 0, "end": 2, "text": "A grounded transcript."}],
+        )
+
+        database.init_db()
+
+        cached = database.get_cached_transcript(asset["id"])
+        self.assertEqual(cached["id"], transcript["id"])
+        self.assertEqual(cached["segments"][0]["text"], "A grounded transcript.")
+        database.update_asset(asset["id"], {"checksum": "changed-source-checksum"})
+        self.assertIsNone(database.get_cached_transcript(asset["id"]))
+
+    def test_transcript_rejects_invalid_timestamped_segments(self):
+        project = database.create_project({"name": "Transcript validation"})
+        asset = database.create_asset({
+            "projectId": project["id"],
+            "filename": "source.mp4",
+            "fileType": "video",
+            "url": "/uploads/source.mp4",
+            "checksum": "source-checksum",
+        })
+        with self.assertRaisesRegex(ValueError, "invalid timing or text"):
+            database.save_transcript(
+                asset_id=asset["id"],
+                source_checksum="source-checksum",
+                provider="test-provider",
+                model="test-model",
+                text="Transcript",
+                duration=4,
+                segments=[{"start": 2, "end": 1, "text": "Invalid timing"}],
+            )
+
+    def test_transcription_without_provider_reports_unavailable_without_fake_text(self):
+        from server import ai_engine
+
+        with patch.object(ai_engine, "groq_client", None):
+            result = ai_engine.transcribe_media_file("unused-local-path.mp4")
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["error_code"], "TRANSCRIPTION_PROVIDER_UNAVAILABLE")
+        self.assertNotIn("text", result)
+
+    def test_asset_transcription_route_caches_provider_result(self):
+        from server import main
+
+        project = database.create_project({"name": "Transcription API"})
+        media = b"\x00\x00\x00\x18ftypisom media for transcription"
+        checksum = hashlib.sha256(media).hexdigest()
+        asset = database.create_asset({
+            "projectId": project["id"],
+            "filename": "source.mp4",
+            "fileType": "video",
+            "url": "/uploads/source.mp4",
+            "checksum": checksum,
+        })
+        assets_dir = os.path.join(self.data_dir.name, "assets")
+        os.makedirs(assets_dir)
+        with open(os.path.join(assets_dir, "source.mp4"), "wb") as media_file:
+            media_file.write(media)
+
+        provider_result = {
+            "status": "success",
+            "provider": "test-provider",
+            "model": "test-model",
+            "text": "Words spoken in the uploaded media.",
+            "duration": 4,
+            "segments": [{"start": 0, "end": 3, "text": "Words spoken in the uploaded media."}],
+        }
+        with patch.object(main, "ASSETS_DIR", assets_dir), patch.object(
+            main, "transcribe_media_file", return_value=provider_result
+        ) as transcribe:
+            first = main.api_transcribe_asset(asset["id"])
+            second = main.api_transcribe_asset(asset["id"])
+            matched = main.api_script_match(main.ScriptMatchRequest(
+                asset_id=asset["id"],
+                script_text="Words spoken in the uploaded media.",
+            ))
+            unmatched = main.api_script_match(main.ScriptMatchRequest(
+                asset_id=asset["id"],
+                script_text="Unrelated astronomy vocabulary.",
+            ))
+
+        transcribe.assert_called_once()
+        self.assertEqual(first["id"], second["id"])
+        self.assertEqual(second["segments"][0]["start"], 0)
+        self.assertEqual(matched.transcript_id, first["id"])
+        self.assertEqual(len(matched.matches), 1)
+        self.assertEqual(matched.matches[0].start_time, 0)
+        self.assertEqual(unmatched.matches, [])
 
     def test_workspace_drafts_state_and_outputs_survive_database_reinitialization(self):
         project = database.create_project({"name": "Persistence test"})
@@ -161,7 +270,7 @@ class LocalPersistenceTests(unittest.TestCase):
         ):
             upload = UploadFile(
                 filename="source.mp4",
-                file=BytesIO(b"persistent uploaded bytes"),
+                file=BytesIO(b"\x00\x00\x00\x18ftypisom persistent uploaded bytes"),
             )
             asset_response = asyncio.run(
                 main.upload_asset(upload, project["id"], "video")
@@ -171,6 +280,19 @@ class LocalPersistenceTests(unittest.TestCase):
                 os.path.basename(asset_response.url),
             )
             self.assertTrue(os.path.isfile(saved_asset_path))
+            self.assertEqual(asset_response.mime_type, "video/mp4")
+            self.assertEqual(
+                asset_response.checksum,
+                hashlib.sha256(b"\x00\x00\x00\x18ftypisom persistent uploaded bytes").hexdigest(),
+            )
+            with self.assertRaises(main.HTTPException) as invalid_upload:
+                asyncio.run(main.upload_asset(
+                    UploadFile(filename="spoofed.mp4", file=BytesIO(b"not an mp4")),
+                    project["id"],
+                    "video",
+                ))
+            self.assertEqual(invalid_upload.exception.status_code, 400)
+            self.assertEqual(len(os.listdir(assets_dir)), 1)
 
             clip = database.create_clip({
                 "projectId": project["id"],

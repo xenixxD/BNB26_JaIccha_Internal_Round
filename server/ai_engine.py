@@ -2,7 +2,8 @@ import os
 import re
 import json
 import uuid
-from typing import List, Dict, Any, Optional, Tuple
+import logging
+from typing import List, Dict, Any, Optional, Tuple, cast
 from dotenv import load_dotenv, find_dotenv
 
 # Load environment configuration from .env securely
@@ -390,15 +391,15 @@ def match_script_to_transcript(
     transcript_blocks: Optional[List[Dict[str, Any]]] = None,
     provider: str = "auto"
 ) -> Tuple[List[Dict[str, Any]], str]:
-    blocks = transcript_blocks or DEFAULT_TRANSCRIPT
+    blocks = transcript_blocks or []
     paragraphs = [p.strip() for p in script_text.split("\n\n") if p.strip()]
     if not paragraphs:
         paragraphs = [p.strip() for p in script_text.split("\n") if p.strip()]
         
-    matches = []
+    matches: List[Dict[str, Any]] = []
     for i, para in enumerate(paragraphs):
         para_words = set(re.findall(r'\w+', para.lower()))
-        best_block = None
+        best_block: Optional[Dict[str, Any]] = None
         best_score = 0.0
         
         for block in blocks:
@@ -409,22 +410,23 @@ def match_script_to_transcript(
             if score > best_score:
                 best_score = score
                 best_block = block
+        if not best_block or best_score <= 0:
+            continue
                 
-        if not best_block:
-            best_block = blocks[i % len(blocks)]
-            best_score = 75.0
-            
         matches.append({
             "id": f"match_{i+1}",
             "script_section": para,
             "matched_transcript_excerpt": best_block["text"],
             "start_time": best_block["start"],
             "end_time": best_block["end"],
-            "confidence_score": round(max(72.0, min(96.0, best_score + 35.0)), 1),
-            "explanation": f"Matched key terms between script paragraph #{i+1} and timestamp {best_block['start']}s-{best_block['end']}s."
+            "confidence_score": round(best_score, 1),
+            "explanation": (
+                f"Local keyword overlap: {best_score:.1f}% "
+                f"({best_block['start']}s-{best_block['end']}s)."
+            )
         })
         
-    return matches, "NLP Keyword & Semantic Matcher"
+    return matches, "Local transcript keyword overlap"
 
 def generate_ai_content(
     transcript_segment: str,
@@ -483,8 +485,8 @@ def transcribe_media_file(file_path: str) -> Dict[str, Any]:
     if not groq_client:
         return {
             "status": "error",
-            "error_message": "Groq API key not configured for Whisper transcription.",
-            "text": "Transcription unavailable (Groq key unconfigured)."
+            "error_code": "TRANSCRIPTION_PROVIDER_UNAVAILABLE",
+            "error_message": "Transcription is unavailable because no provider is configured.",
         }
         
     try:
@@ -495,9 +497,30 @@ def transcribe_media_file(file_path: str) -> Dict[str, Any]:
                 response_format="verbose_json"
             )
             
-        text = transcription.text if hasattr(transcription, "text") else str(transcription)
-        duration = transcription.duration if hasattr(transcription, "duration") else 160.0
-        segments = transcription.segments if hasattr(transcription, "segments") else []
+        text = str(getattr(transcription, "text", "") or "").strip()
+        duration = float(getattr(transcription, "duration", 0) or 0)
+        raw_segments = cast(
+            List[Any],
+            list(getattr(transcription, "segments", None) or []),
+        )
+        segments: List[Dict[str, Any]] = []
+        for segment in raw_segments:
+            if isinstance(segment, dict):
+                segment_data = cast(Dict[str, Any], segment)
+                start = segment_data.get("start", 0)
+                end = segment_data.get("end", 0)
+                segment_text = segment_data.get("text", "")
+            else:
+                start = getattr(segment, "start", 0)
+                end = getattr(segment, "end", 0)
+                segment_text = getattr(segment, "text", "")
+            segments.append({"start": start, "end": end, "text": segment_text})
+        if not text or not segments:
+            return {
+                "status": "error",
+                "error_code": "TRANSCRIPTION_NO_TIMESTAMPED_SEGMENTS",
+                "error_message": "The transcription provider returned no timestamped transcript segments.",
+            }
         
         return {
             "status": "success",
@@ -505,12 +528,14 @@ def transcribe_media_file(file_path: str) -> Dict[str, Any]:
             "text": text,
             "duration": duration,
             "segments": segments,
-            "provider_used": f"Groq Whisper ({GROQ_WHISPER_MODEL})"
+            "provider": "groq",
+            "model": GROQ_WHISPER_MODEL,
+            "provider_used": f"Groq Whisper ({GROQ_WHISPER_MODEL})",
         }
-    except Exception as e:
-        print(f"Groq Whisper Transcription Error: {e}")
+    except Exception:
+        logging.exception("Groq Whisper transcription request failed")
         return {
             "status": "error",
-            "error_message": f"Groq Whisper transcription failed: {str(e)}",
-            "text": f"Transcription error: {str(e)}"
+            "error_code": "TRANSCRIPTION_PROVIDER_ERROR",
+            "error_message": "The transcription provider failed to process this media file.",
         }

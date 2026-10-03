@@ -558,27 +558,23 @@ export const useStore = create((set, get) => ({
       },
 
       runScriptMatcher: async (assetId, scriptText) => {
-        const response = await api.matchScript(assetId, scriptText, get().aiProvider);
-        if (response && response.matches) {
-          set({ scriptMatches: response.matches });
-          await get().persistProjectState('scriptMatches', response.matches);
-          return response.matches;
+        try {
+          const response = await api.matchScript(assetId, scriptText, get().aiProvider);
+          const matches = response.matches.map((match) => ({
+            ...match,
+            assetId,
+            transcriptId: response.transcript_id
+          }));
+          set({ scriptMatches: matches });
+          await get().persistProjectState('scriptMatches', matches);
+          return matches;
+        } catch (error) {
+          set({
+            scriptMatches: [],
+            workspaceError: `Could not match script to footage: ${error.message}`
+          });
+          throw error;
         }
-
-        const matches = [
-          {
-            id: 'match_1',
-            script_section: 'Most creators make one huge mistake when starting with AI tools: they treat AI as a replacement rather than an operating copilot.',
-            matched_transcript_excerpt: 'Most creators make one huge mistake when starting with AI tools: they treat AI as a replacement rather than an operating copilot.',
-            start_time: 12.5,
-            end_time: 35.0,
-            confidence_score: 96.4,
-            explanation: 'Exact subject alignment on creator mindset shift (Timestamp 12.5s - 35.0s)'
-          }
-        ];
-        set({ scriptMatches: matches });
-        await get().persistProjectState('scriptMatches', matches);
-        return matches;
       },
 
       generateClip: async (candidate) => {

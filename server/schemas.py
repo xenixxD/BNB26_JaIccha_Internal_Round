@@ -40,6 +40,8 @@ class AssetResponse(BaseModel):
     upload_date: str
     duration: Optional[float] = None
     status: str # "ready" | "processing" | "error"
+    checksum: Optional[str] = None
+    mime_type: Optional[str] = None
 
 class ProjectListResponse(BaseModel):
     projects: List[ProjectItem]
@@ -121,7 +123,7 @@ class ABHookResponse(BaseModel):
 
 class ScriptMatchRequest(BaseModel):
     asset_id: str
-    script_text: str
+    script_text: str = Field(min_length=1, max_length=20000)
     transcript_json: Optional[List[Dict[str, Any]]] = None
     provider: Optional[str] = "auto"
 
@@ -136,6 +138,7 @@ class ScriptMatchItem(BaseModel):
 
 class ScriptMatchResponse(BaseModel):
     asset_id: str
+    transcript_id: str
     matches: List[ScriptMatchItem]
     provider_used: Optional[str] = "auto"
 
@@ -173,6 +176,23 @@ class TranscriptionResponse(BaseModel):
     duration: float
     segments: Optional[List[Dict[str, Any]]] = None
     provider_used: str = "groq_whisper"
+
+class TranscriptSegmentResponse(BaseModel):
+    start: float
+    end: float
+    text: str
+    confidence: Optional[float] = None
+
+class AssetTranscriptResponse(BaseModel):
+    id: str
+    asset_id: str
+    source_checksum: str
+    provider: str
+    model: str
+    text: str
+    duration: float
+    created_at: str
+    segments: List[TranscriptSegmentResponse]
 
 class ClipTrimRequest(BaseModel):
     asset_id: str

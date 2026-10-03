@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import sqlite3
 import uuid
@@ -65,12 +66,21 @@ def init_db() -> None:
                 duration REAL,
                 status TEXT NOT NULL DEFAULT 'ready',
                 content TEXT,
+                checksum TEXT,
+                mime_type TEXT,
                 is_demo INTEGER NOT NULL DEFAULT 0,
                 metadata TEXT DEFAULT '{}',
                 FOREIGN KEY(project_id) REFERENCES projects(id)
             )
             """
         )
+        asset_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(assets)").fetchall()
+        }
+        if "checksum" not in asset_columns:
+            conn.execute("ALTER TABLE assets ADD COLUMN checksum TEXT")
+        if "mime_type" not in asset_columns:
+            conn.execute("ALTER TABLE assets ADD COLUMN mime_type TEXT")
 
         conn.execute(
             """
@@ -159,6 +169,40 @@ def init_db() -> None:
                 FOREIGN KEY(asset_id) REFERENCES assets(id),
                 FOREIGN KEY(clip_id) REFERENCES clips(id),
                 FOREIGN KEY(draft_id) REFERENCES clip_drafts(id)
+            )
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS transcripts (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                asset_id TEXT NOT NULL,
+                source_checksum TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL,
+                text TEXT NOT NULL,
+                duration REAL NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE (asset_id, source_checksum, provider, model),
+                FOREIGN KEY(project_id) REFERENCES projects(id),
+                FOREIGN KEY(asset_id) REFERENCES assets(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS transcript_segments (
+                id TEXT PRIMARY KEY,
+                transcript_id TEXT NOT NULL,
+                sequence INTEGER NOT NULL,
+                start_time REAL NOT NULL,
+                end_time REAL NOT NULL,
+                text TEXT NOT NULL,
+                confidence REAL,
+                UNIQUE (transcript_id, sequence),
+                FOREIGN KEY(transcript_id) REFERENCES transcripts(id)
             )
             """
         )
@@ -266,6 +310,8 @@ def create_asset(payload: Dict[str, Any]) -> Dict[str, Any]:
         "duration": payload.get("duration"),
         "status": payload.get("status") or "ready",
         "content": payload.get("content"),
+        "checksum": payload.get("checksum"),
+        "mime_type": payload.get("mimeType") or payload.get("mime_type"),
         "is_demo": bool(payload.get("isDemo") or payload.get("is_demo") or 0),
         "metadata": payload.get("metadata") or {},
     }
@@ -279,8 +325,9 @@ def create_asset(payload: Dict[str, Any]) -> Dict[str, Any]:
         conn.execute(
             """
             INSERT INTO assets (
-                id, project_id, filename, file_type, file_size, url, upload_date, duration, status, content, is_demo, metadata
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                id, project_id, filename, file_type, file_size, url, upload_date, duration,
+                status, content, checksum, mime_type, is_demo, metadata
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 asset["id"],
@@ -293,6 +340,8 @@ def create_asset(payload: Dict[str, Any]) -> Dict[str, Any]:
                 asset["duration"],
                 asset["status"],
                 asset["content"],
+                asset["checksum"],
+                asset["mime_type"],
                 1 if asset["is_demo"] else 0,
                 json.dumps(asset["metadata"]),
             ),
@@ -323,10 +372,199 @@ def update_asset(asset_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
                 "UPDATE assets SET duration = ? WHERE id = ?",
                 (payload["duration"], asset_id),
             )
+        if "checksum" in payload:
+            transcript_rows = conn.execute(
+                "SELECT id FROM transcripts WHERE asset_id = ? AND source_checksum != ?",
+                (asset_id, payload["checksum"]),
+            ).fetchall()
+            transcript_ids = [item["id"] for item in transcript_rows]
+            if transcript_ids:
+                placeholders = ",".join("?" for _ in transcript_ids)
+                conn.execute(
+                    f"DELETE FROM transcript_segments WHERE transcript_id IN ({placeholders})",
+                    transcript_ids,
+                )
+                conn.execute(
+                    f"DELETE FROM transcripts WHERE id IN ({placeholders})",
+                    transcript_ids,
+                )
+            conn.execute(
+                "UPDATE assets SET checksum = ? WHERE id = ?",
+                (payload["checksum"], asset_id),
+            )
+        if "mime_type" in payload:
+            conn.execute(
+                "UPDATE assets SET mime_type = ? WHERE id = ?",
+                (payload["mime_type"], asset_id),
+            )
         conn.commit()
         return asset_to_dict(conn.execute(
             "SELECT * FROM assets WHERE id = ?", (asset_id,)
         ).fetchone())
+    finally:
+        conn.close()
+
+
+def get_asset(asset_id: str) -> Optional[Dict[str, Any]]:
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)).fetchone()
+        return asset_to_dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def save_transcript(
+    asset_id: str,
+    source_checksum: str,
+    provider: str,
+    model: str,
+    text: str,
+    duration: float,
+    segments: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    if not source_checksum or not provider or not model or not text.strip():
+        raise ValueError("Transcript metadata and text are required")
+    if not math.isfinite(duration) or duration <= 0:
+        raise ValueError("Transcript duration must be a positive finite number")
+    if not segments:
+        raise ValueError("A transcript must contain timestamped segments")
+
+    normalized_segments: List[Dict[str, Any]] = []
+    previous_start = -1.0
+    for index, segment in enumerate(segments):
+        try:
+            start = float(segment.get("start", segment.get("start_time", 0)))
+            end = float(segment.get("end", segment.get("end_time", 0)))
+            confidence = segment.get("confidence")
+            if confidence is not None:
+                confidence = float(confidence)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Transcript segment {index} has invalid numeric fields") from exc
+        segment_text = str(segment.get("text", "")).strip()
+        if (
+            not math.isfinite(start)
+            or not math.isfinite(end)
+            or start < 0
+            or end <= start
+            or end > duration + 1
+            or start < previous_start
+            or not segment_text
+        ):
+            raise ValueError(f"Transcript segment {index} has invalid timing or text")
+        if confidence is not None:
+            if not math.isfinite(confidence) or not 0 <= confidence <= 1:
+                raise ValueError(f"Transcript segment {index} has invalid confidence")
+        normalized_segments.append({
+            "start": start,
+            "end": end,
+            "text": segment_text,
+            "confidence": confidence,
+        })
+        previous_start = start
+
+    conn = get_connection()
+    try:
+        asset = conn.execute(
+            "SELECT project_id, checksum FROM assets WHERE id = ?",
+            (asset_id,),
+        ).fetchone()
+        if not asset:
+            raise ValueError(f"Asset not found: {asset_id}")
+        if asset["checksum"] != source_checksum:
+            raise ValueError("Asset checksum changed; transcript cannot be attached")
+
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO transcripts (
+                id, project_id, asset_id, source_checksum, provider, model, text, duration, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"transcript_{uuid.uuid4().hex}",
+                asset["project_id"],
+                asset_id,
+                source_checksum,
+                provider,
+                model,
+                text.strip(),
+                duration,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        transcript = conn.execute(
+            """
+            SELECT * FROM transcripts
+            WHERE asset_id = ? AND source_checksum = ? AND provider = ? AND model = ?
+            """,
+            (asset_id, source_checksum, provider, model),
+        ).fetchone()
+        if transcript is None:
+            raise RuntimeError("Transcript persistence failed")
+        existing_segments = conn.execute(
+            "SELECT COUNT(*) AS count FROM transcript_segments WHERE transcript_id = ?",
+            (transcript["id"],),
+        ).fetchone()["count"]
+        if not existing_segments:
+            for index, segment in enumerate(normalized_segments):
+                conn.execute(
+                    """
+                    INSERT INTO transcript_segments (
+                        id, transcript_id, sequence, start_time, end_time, text, confidence
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        f"segment_{uuid.uuid4().hex}",
+                        transcript["id"],
+                        index,
+                        segment["start"],
+                        segment["end"],
+                        segment["text"],
+                        segment["confidence"],
+                    ),
+                )
+        conn.commit()
+        return transcript_to_dict(
+            transcript,
+            conn.execute(
+                """
+                SELECT * FROM transcript_segments
+                WHERE transcript_id = ? ORDER BY sequence
+                """,
+                (transcript["id"],),
+            ).fetchall(),
+        )
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def get_cached_transcript(asset_id: str) -> Optional[Dict[str, Any]]:
+    conn = get_connection()
+    try:
+        asset = conn.execute(
+            "SELECT checksum FROM assets WHERE id = ?",
+            (asset_id,),
+        ).fetchone()
+        if not asset or not asset["checksum"]:
+            return None
+        transcript = conn.execute(
+            """
+            SELECT * FROM transcripts
+            WHERE asset_id = ? AND source_checksum = ?
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (asset_id, asset["checksum"]),
+        ).fetchone()
+        if not transcript:
+            return None
+        segments = conn.execute(
+            "SELECT * FROM transcript_segments WHERE transcript_id = ? ORDER BY sequence",
+            (transcript["id"],),
+        ).fetchall()
+        return transcript_to_dict(transcript, segments)
     finally:
         conn.close()
 
@@ -352,6 +590,21 @@ def delete_asset(asset_id: str) -> Dict[str, Any]:
         ).fetchall()
         output_urls = [row["url"] for row in output_rows]
         conn.execute("DELETE FROM outputs WHERE asset_id = ?", (asset_id,))
+        transcript_rows = conn.execute(
+            "SELECT id FROM transcripts WHERE asset_id = ?",
+            (asset_id,),
+        ).fetchall()
+        transcript_ids = [row["id"] for row in transcript_rows]
+        if transcript_ids:
+            placeholders = ",".join("?" for _ in transcript_ids)
+            conn.execute(
+                f"DELETE FROM transcript_segments WHERE transcript_id IN ({placeholders})",
+                transcript_ids,
+            )
+            conn.execute(
+                f"DELETE FROM transcripts WHERE id IN ({placeholders})",
+                transcript_ids,
+            )
 
         if clip_ids:
             placeholders = ",".join("?" for _ in clip_ids)
@@ -418,7 +671,12 @@ def delete_project(project_id: str) -> Dict[str, Any]:
             "SELECT url FROM outputs WHERE project_id = ?",
             (project_id,),
         ).fetchall()
+        transcript_rows = conn.execute(
+            "SELECT id FROM transcripts WHERE project_id = ?",
+            (project_id,),
+        ).fetchall()
         clip_ids = [row["id"] for row in clip_rows]
+        transcript_ids = [row["id"] for row in transcript_rows]
         asset_files = [row["url"] for row in asset_rows]
         output_files = [row["url"] for row in output_rows]
 
@@ -436,6 +694,16 @@ def delete_project(project_id: str) -> Dict[str, Any]:
             for draft in draft_rows:
                 conn.execute("DELETE FROM clip_drafts WHERE id = ?", (draft["id"],))
         conn.execute("DELETE FROM clips WHERE project_id = ?", (project_id,))
+        if transcript_ids:
+            placeholders = ",".join("?" for _ in transcript_ids)
+            conn.execute(
+                f"DELETE FROM transcript_segments WHERE transcript_id IN ({placeholders})",
+                transcript_ids,
+            )
+            conn.execute(
+                f"DELETE FROM transcripts WHERE id IN ({placeholders})",
+                transcript_ids,
+            )
         conn.execute("DELETE FROM assets WHERE project_id = ?", (project_id,))
         conn.execute("DELETE FROM project_state WHERE project_id = ?", (project_id,))
         conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
@@ -843,7 +1111,35 @@ def asset_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
         "duration": row["duration"],
         "status": row["status"],
         "content": row["content"],
+        "checksum": row["checksum"],
+        "mimeType": row["mime_type"],
         "isDemo": bool(row["is_demo"]),
+    }
+
+
+def transcript_to_dict(
+    row: sqlite3.Row,
+    segment_rows: List[sqlite3.Row],
+) -> Dict[str, Any]:
+    return {
+        "id": row["id"],
+        "project_id": row["project_id"],
+        "asset_id": row["asset_id"],
+        "source_checksum": row["source_checksum"],
+        "provider": row["provider"],
+        "model": row["model"],
+        "text": row["text"],
+        "duration": row["duration"],
+        "created_at": row["created_at"],
+        "segments": [
+            {
+                "start": segment["start_time"],
+                "end": segment["end_time"],
+                "text": segment["text"],
+                "confidence": segment["confidence"],
+            }
+            for segment in segment_rows
+        ],
     }
 
 

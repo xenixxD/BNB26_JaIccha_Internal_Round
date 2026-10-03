@@ -1,7 +1,9 @@
 import os
 import uuid
 import logging
+import hashlib
 from typing import Optional
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,14 +18,14 @@ try:
     from database import (
         list_projects, create_project, delete_project, list_assets, create_asset, list_clips, create_clip,
         init_db, update_asset, delete_asset, save_clip_draft, list_clip_drafts, update_clip, save_project_state,
-        get_project_state, create_output, list_outputs
+        get_project_state, create_output, list_outputs, get_asset, get_cached_transcript, save_transcript
     )
     from local_storage import ASSETS_DIR, OUTPUTS_DIR
 except ModuleNotFoundError:
     from server.database import (
         list_projects, create_project, delete_project, list_assets, create_asset, list_clips, create_clip,
         init_db, update_asset, delete_asset, save_clip_draft, list_clip_drafts, update_clip, save_project_state,
-        get_project_state, create_output, list_outputs
+        get_project_state, create_output, list_outputs, get_asset, get_cached_transcript, save_transcript
     )
     from server.local_storage import ASSETS_DIR, OUTPUTS_DIR
 
@@ -33,10 +35,10 @@ try:
         PotentialAnalysisRequest, PotentialAnalysisResponse,
         RetentionAnalysisRequest, RetentionAnalysisResponse,
         ABHookRequest, ABHookResponse,
-        ScriptMatchRequest, ScriptMatchResponse,
+        ScriptMatchRequest, ScriptMatchItem, ScriptMatchResponse,
         ContentGenRequest, ContentGenResponse,
         PlannerGenerateRequest, PlannerGenerateResponse,
-        TranscriptionResponse,
+        AssetTranscriptResponse,
         ClipTrimRequest, TrimTaskResponse
     )
     from ffmpeg_service import check_ffmpeg, process_video_trim, get_task_status
@@ -51,10 +53,10 @@ except ModuleNotFoundError:
         PotentialAnalysisRequest, PotentialAnalysisResponse,
         RetentionAnalysisRequest, RetentionAnalysisResponse,
         ABHookRequest, ABHookResponse,
-        ScriptMatchRequest, ScriptMatchResponse,
+        ScriptMatchRequest, ScriptMatchItem, ScriptMatchResponse,
         ContentGenRequest, ContentGenResponse,
         PlannerGenerateRequest, PlannerGenerateResponse,
-        TranscriptionResponse,
+        AssetTranscriptResponse,
         ClipTrimRequest, TrimTaskResponse
     )
     from server.ffmpeg_service import check_ffmpeg, process_video_trim, get_task_status
@@ -274,6 +276,47 @@ def put_project_persisted_state(project_id: str, state_key: str, request: dict):
 def get_project_outputs(project_id: str):
     return list_outputs(project_id)
 
+
+def _file_checksum_and_mime(path: str, file_type: str, extension: str) -> tuple[str, str]:
+    with open(path, "rb") as media_file:
+        header = media_file.read(32)
+        media_file.seek(0)
+        digest = hashlib.sha256()
+        for chunk in iter(lambda: media_file.read(1024 * 1024), b""):
+            digest.update(chunk)
+
+    signatures = {
+        ".mp4": (file_type == "video" and header[4:8] == b"ftyp", "video/mp4"),
+        ".mov": (file_type == "video" and header[4:8] == b"ftyp", "video/quicktime"),
+        ".m4a": (file_type == "audio" and header[4:8] == b"ftyp", "audio/mp4"),
+        ".webm": (
+            file_type == "video" and header.startswith(b"\x1a\x45\xdf\xa3"),
+            "video/webm",
+        ),
+        ".mkv": (
+            file_type == "video" and header.startswith(b"\x1a\x45\xdf\xa3"),
+            "video/x-matroska",
+        ),
+        ".mp3": (
+            file_type == "audio"
+            and (header.startswith(b"ID3") or (len(header) > 1 and header[0] == 0xFF and header[1] & 0xE0 == 0xE0)),
+            "audio/mpeg",
+        ),
+        ".wav": (file_type == "audio" and header.startswith(b"RIFF") and header[8:12] == b"WAVE", "audio/wav"),
+        ".jpg": (file_type == "image" and header.startswith(b"\xff\xd8\xff"), "image/jpeg"),
+        ".jpeg": (file_type == "image" and header.startswith(b"\xff\xd8\xff"), "image/jpeg"),
+        ".png": (file_type == "image" and header.startswith(b"\x89PNG\r\n\x1a\n"), "image/png"),
+        ".webp": (
+            file_type == "image" and header.startswith(b"RIFF") and header[8:12] == b"WEBP",
+            "image/webp",
+        ),
+    }
+    valid, mime_type = signatures.get(extension, (False, "application/octet-stream"))
+    if not valid:
+        raise ValueError("Uploaded content does not match its declared media type")
+    return digest.hexdigest(), mime_type
+
+
 @app.post("/api/assets/upload", response_model=AssetResponse)
 async def upload_asset(
     file: UploadFile = File(...),
@@ -305,6 +348,10 @@ async def upload_asset(
                     raise HTTPException(status_code=413, detail="Upload exceeds the 500 MB limit")
                 buffer.write(chunk)
 
+        try:
+            checksum, mime_type = _file_checksum_and_mime(saved_path, file_type, file_ext)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         file_url = f"/uploads/{saved_filename}"
         try:
             asset = create_asset({
@@ -314,11 +361,11 @@ async def upload_asset(
                 "fileType": file_type,
                 "fileSize": file_size,
                 "url": file_url,
-                "uploadDate": __import__("datetime").datetime.now(
-                    __import__("datetime").timezone.utc
-                ).isoformat(),
+                "uploadDate": datetime.now(timezone.utc).isoformat(),
                 "duration": None,
                 "status": "ready",
+                "checksum": checksum,
+                "mimeType": mime_type,
                 "isDemo": False,
             })
         except Exception:
@@ -335,16 +382,19 @@ async def upload_asset(
             url=asset["url"],
             upload_date=asset["upload_date"],
             duration=asset["duration"],
-            status=asset["status"]
+            status=asset["status"],
+            checksum=asset["checksum"],
+            mime_type=asset["mimeType"],
         )
     except HTTPException:
         if os.path.exists(saved_path):
             os.remove(saved_path)
         raise
-    except Exception as e:
+    except Exception:
+        logging.exception("Failed to upload media asset")
         if os.path.exists(saved_path):
             os.remove(saved_path)
-        raise HTTPException(status_code=500, detail=f"Failed to upload asset: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to upload asset") from None
     finally:
         await file.close()
 
@@ -396,13 +446,18 @@ def api_planner_generate(request: PlannerGenerateRequest):
 
 @app.post("/api/ai/script-match", response_model=ScriptMatchResponse)
 def api_script_match(request: ScriptMatchRequest):
-    matches, provider_used = match_script_to_transcript(
+    if not request.script_text.strip():
+        raise HTTPException(status_code=422, detail="Script text must not be blank")
+    transcript = _get_or_create_asset_transcript(request.asset_id)
+    raw_matches, provider_used = match_script_to_transcript(
         script_text=request.script_text,
+        transcript_blocks=transcript["segments"],
         provider=request.provider or "auto"
     )
     return ScriptMatchResponse(
         asset_id=request.asset_id,
-        matches=matches,
+        transcript_id=transcript["id"],
+        matches=[ScriptMatchItem(**match) for match in raw_matches],
         provider_used=provider_used
     )
 
@@ -424,31 +479,63 @@ def api_generate_content(request: ContentGenRequest):
         provider_used=provider_used
     )
 
-@app.post("/api/ai/transcribe")
-async def api_transcribe(file: UploadFile = File(...)):
+def _get_or_create_asset_transcript(asset_id: str):
+    asset = get_asset(asset_id)
+    if not asset:
+        raise HTTPException(status_code=404, detail="Source asset not found")
+    if asset["file_type"] not in {"video", "audio"}:
+        raise HTTPException(status_code=400, detail="Only audio and video assets can be transcribed")
+    asset_url = asset.get("url") or ""
+    if not asset_url.startswith("/uploads/"):
+        raise HTTPException(status_code=422, detail="Source asset is not stored in local uploads")
+    saved_filename = os.path.basename(asset_url)
+    saved_path = os.path.abspath(os.path.join(ASSETS_DIR, saved_filename))
+    if os.path.commonpath([os.path.abspath(ASSETS_DIR), saved_path]) != os.path.abspath(ASSETS_DIR):
+        raise HTTPException(status_code=422, detail="Invalid local media path")
+    if not os.path.isfile(saved_path):
+        raise HTTPException(status_code=410, detail="Source media file is missing from local storage")
+
+    extension = os.path.splitext(saved_filename)[1].lower()
     try:
-        unique_id = str(uuid.uuid4())[:8]
-        saved_filename = f"transcribe_{unique_id}_{file.filename}"
-        saved_path = os.path.join(UPLOADS_DIR, saved_filename)
-        
-        with open(saved_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-            
-        result = transcribe_media_file(saved_path)
-        
-        # Cleanup temporary audio/video file
-        try:
-            if os.path.exists(saved_path):
-                os.remove(saved_path)
-        except Exception as cleanup_err:
-            print(f"Cleanup error for {saved_path}: {cleanup_err}")
-            
-        if result.get("status") == "error":
-            raise HTTPException(status_code=500, detail=result.get("error_message"))
-            
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+        checksum, mime_type = _file_checksum_and_mime(saved_path, asset["file_type"], extension)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if checksum != asset.get("checksum") or mime_type != asset.get("mimeType"):
+        update_asset(asset_id, {"checksum": checksum, "mime_type": mime_type})
+
+    transcript = get_cached_transcript(asset_id)
+    if transcript:
+        return transcript
+
+    result = transcribe_media_file(saved_path)
+    if result.get("status") != "success":
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": result.get("error_code", "TRANSCRIPTION_FAILED"),
+                "message": result.get("error_message", "Transcription is unavailable."),
+            },
+        )
+    try:
+        return save_transcript(
+            asset_id=asset_id,
+            source_checksum=checksum,
+            provider=result["provider"],
+            model=result["model"],
+            text=result["text"],
+            duration=result["duration"],
+            segments=result["segments"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=f"Invalid transcript from provider: {exc}") from exc
+
+
+@app.post(
+    "/api/assets/{asset_id}/transcript",
+    response_model=AssetTranscriptResponse,
+)
+def api_transcribe_asset(asset_id: str):
+    return _get_or_create_asset_transcript(asset_id)
 
 @app.post("/api/clips/trim", response_model=TrimTaskResponse)
 def api_trim_clip(request: ClipTrimRequest):

@@ -231,9 +231,10 @@ The FastAPI service currently exposes the following routes:
 | `DELETE` | `/api/projects/{project_id}` | Delete a project and its assets, clips, drafts, analysis state, outputs, and local media |
 | `GET` | `/api/assets?project_id=...` | List assets, optionally filtered by project |
 | `POST` | `/api/assets` | Create asset metadata from a JSON object |
-| `POST` | `/api/assets/upload` | Upload a file as multipart form data |
+| `POST` | `/api/assets/upload` | Upload a file, verify declared media type against its signature, and store SHA-256/MIME metadata |
 | `PUT` | `/api/assets/{asset_id}` | Persist asset metadata updates, such as detected duration |
 | `DELETE` | `/api/assets/{asset_id}` | Delete an asset and its dependent clips, drafts, export metadata, and local media files |
+| `POST` | `/api/assets/{asset_id}/transcript` | Transcribe a stored audio/video asset and cache its timestamped transcript by source checksum and provider/model |
 | `GET` | `/api/clips?project_id=...` | List clips, optionally filtered by project |
 | `POST` | `/api/clips` | Create a clip metadata record |
 | `PUT` | `/api/clips/{clip_id}` | Persist clip status and metadata updates |
@@ -245,7 +246,7 @@ The FastAPI service currently exposes the following routes:
 | `POST` | `/api/ai/analyze-potential` | Get candidate moments for an asset |
 | `POST` | `/api/ai/analyze-retention` | Get heuristic/AI retention analysis |
 | `POST` | `/api/ai/ab-hooks` | Generate hook variations |
-| `POST` | `/api/ai/script-match` | Match script text against transcript data |
+| `POST` | `/api/ai/script-match` | Match against a persisted asset transcript; returns transcript ID, excerpt, timestamps, and lexical-overlap score |
 | `POST` | `/api/ai/generate-content` | Generate hooks, captions, hashtags, and subtitles |
 | `POST` | `/api/clips/trim` | Trim a local uploaded video through FFmpeg |
 | `GET` | `/api/clips/status/{task_id}` | Read current trim task status |
@@ -262,12 +263,15 @@ The backend persists the following metadata in the local SQLite database (`serve
 
 - **Projects:** name, description/content goal, category, target platforms, status, timestamps, thumbnail, and item counts.
 - **Assets:** project association, filename, type, size, logical local URL, upload date, duration, and status. Saved script text is stored in the asset record.
+- **Transcripts:** provider/model, source checksum, text, duration, and validated timestamped segments tied to the source asset. A transcript is reused only while the asset checksum is unchanged.
 - **Clips:** project/asset association, trim range, aspect ratio, hook/caption fields, scheduling metadata, export URL, and status.
 - **Draft versions:** each explicit Save Draft creates a new immutable version with its parent version and timestamp; the latest saved fields are also restored as the current clip.
 - **Project state:** supported transcript/candidate/retention/hook/script-match results are saved and reloaded without requiring analysis to run again.
 - **Outputs:** output metadata links a generated file to its project, source asset, clip, and latest saved draft when available.
 
 SQLite is initialized automatically. The seed routine inserts demonstration content only when there are no projects. Uploaded source file bytes are stored in `server/data/assets`; generated exports are stored in `server/data/outputs`. The database stores their metadata and logical `/uploads/...` or `/exports/...` references, never the full video/audio bytes. Source uploads use unique server-generated filenames and are not overwritten by later uploads. Deleting an asset from the Asset Library requires confirmation and removes its dependent clips, saved drafts, output metadata, and files referenced through the local upload/export routes.
+
+The Script Matcher uses the selected uploaded video. Its first match request transcribes that stored media using Groq Whisper when `GROQ_API_KEY` is configured, validates and persists the timestamped transcript, and caches it against the asset's SHA-256 checksum. Repeated requests reuse the transcript; changing the source bytes invalidates the old cache. Uploads are checked against media signatures as well as filename extensions. Matching currently reports **local lexical word overlap**, not embedding-based semantic similarity, and returns no match when there is no transcript evidence. Transcription is unavailable without Groq configured; this workflow does not substitute a fabricated transcript.
 
 On frontend startup, projects, assets, and clips are fetched from the backend. Creating projects/scripts/clips, uploading files, saving analysis state, updating duration/status, saving drafts, and exporting use backend persistence APIs. Editor keystrokes remain in memory until **Save Draft** is clicked; each click makes the next saved version. Draft history in the editor can restore an earlier version for continued editing.
 
@@ -285,13 +289,13 @@ The reset affects only the configured local directory; it does not modify any pr
 
 ## AI behavior
 
-The AI module is configured to initialize the Google GenAI client when `GEMINI_API_KEY` is available. Its analysis and generation functions also contain heuristic/default transcript fallbacks. With no key—or when a provider call fails—responses may be generated from built-in sample transcript blocks and local heuristics rather than the uploaded video's actual audio/video.
+The Google GenAI client initializes when `GEMINI_API_KEY` is available. Some existing analysis and generation functions still contain heuristic/default transcript fallbacks; their results may be generated from built-in sample transcript blocks rather than the uploaded video's actual content. The Script Matcher/transcription workflow is an exception: it uses a checksum-verified local media file and persisted provider transcript, and fails explicitly if transcription is unavailable.
 
 Consequently:
 
 - `gemini_configured: true` in `/api/health` means a key was detected; it does not prove successful inference.
 - Candidate scores and retention estimates are not measured platform analytics.
-- Do not claim the app transcribes arbitrary uploaded files or bases all analysis on their actual content unless that behavior has been separately verified.
+- Script matching currently uses transcript word overlap rather than semantic embeddings; other analyzers are not yet consistently grounded in stored transcript evidence.
 - Avoid sending confidential or private media to an external AI provider without appropriate consent and configuration.
 
 ## Validation
@@ -300,8 +304,9 @@ The following checks have been run against the current working tree:
 
 - `npm run build` — passed; Vite emitted a warning that the generated JavaScript bundle exceeds 500 kB.
 - `python -m compileall -q server` — passed.
-- `python -m unittest discover -s server\tests -v` — passed three focused persistence, upload, deletion, draft-version, and database-reinitialization tests.
-- Pylance syntax checks — no syntax errors in any Python file included in the workspace analysis set.
+- `python -m unittest server.tests.test_local_persistence` — passed all 10 persistence, transcript-cache, upload-validation, deletion, and script-match tests.
+- Pylance syntax checks — no syntax errors in the changed backend modules or persistence tests.
+- `git diff --check` — passed.
 - `npm run lint` — could not run because ESLint is not installed in this workspace.
 
 These checks validate compilation, frontend bundling, and selected local persistence/API behavior. They do not prove every UI workflow or real FFmpeg video export end to end.
