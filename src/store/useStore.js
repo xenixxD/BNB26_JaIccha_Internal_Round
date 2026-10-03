@@ -89,10 +89,43 @@ export const useStore = create(
           content: assetData.content
         };
 
+        let newClip = null;
+        if (fileType === 'video') {
+          const cleanName = newAsset.filename.replace(/\.[^/.]+$/, "");
+          newClip = {
+            id: `clip_${Date.now().toString(36)}`,
+            projectId: newAsset.projectId,
+            assetId: newAsset.id,
+            title: `Clip: ${cleanName}`,
+            startTime: 0.0,
+            endTime: Math.min(30.0, newAsset.duration || 30.0),
+            duration: Math.min(30.0, newAsset.duration || 30.0),
+            aspectRatio: '9:16',
+            potentialScore: 94.0,
+            ratingLabel: 'High Potential',
+            suggestedHook: `Key takeaway from ${cleanName}...`,
+            hooks: [
+              `🔥 Key takeaway from ${cleanName}`,
+              `💡 Watch this workflow strategy...`
+            ],
+            selectedHookIndex: 0,
+            caption: `Uploaded footage segment: "${newAsset.filename}"\n\nFollow for more updates!`,
+            hashtags: ['#CreatorAI', '#Shorts', '#Reels'],
+            subtitles: [
+              { id: 1, start: 0.0, end: 4.0, text: `Segment from ${cleanName}` }
+            ],
+            status: 'Draft',
+            platform: 'Instagram Reels',
+            exportedUrl: null
+          };
+        }
+
         set((state) => ({
           assets: [newAsset, ...state.assets],
+          clips: newClip ? [newClip, ...state.clips] : state.clips,
+          activeClipId: newClip ? newClip.id : state.activeClipId,
           projects: state.projects.map((p) =>
-            p.id === newAsset.projectId ? { ...p, assetsCount: (p.assetsCount || 0) + 1 } : p
+            p.id === newAsset.projectId ? { ...p, assetsCount: (p.assetsCount || 0) + 1, clipsCount: newClip ? (p.clipsCount || 0) + 1 : p.clipsCount } : p
           )
         }));
         return newAsset;

@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore } from '../store/useStore';
+import { storageService } from '../services/storage';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { Panel } from '../components/ui/Panel';
@@ -45,7 +46,8 @@ export const VideoEditorPage = () => {
     updateClipTimestamps,
     generateAiContentForClip,
     exportClip,
-    moveClipStatus
+    moveClipStatus,
+    updateAssetDuration
   } = useStore();
 
   const currentClip = clips.find((c) => c.id === activeClipId) || clips[0];
@@ -53,12 +55,43 @@ export const VideoEditorPage = () => {
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
+  const [videoSrc, setVideoSrc] = useState(null);
   const [selectedPlatform, setSelectedPlatform] = useState('instagram_reels');
   const [exporting, setExporting] = useState(false);
   const [exportResult, setExportResult] = useState(null);
   const [copiedField, setCopiedField] = useState(null);
   const [leftTab, setLeftTab] = useState('media'); // 'media' | 'captions' | 'audio'
   const [timelineZoom, setTimelineZoom] = useState(100);
+
+  // Resolve video player source (IndexedDB Blob or URL)
+  useEffect(() => {
+    let activeObjUrl = null;
+    let isSubscribed = true;
+
+    const loadVideoSrc = async () => {
+      if (currentAsset) {
+        try {
+          const blob = await storageService.getBlob(currentAsset.id);
+          if (blob && isSubscribed) {
+            activeObjUrl = URL.createObjectURL(blob);
+            setVideoSrc(activeObjUrl);
+            return;
+          }
+        } catch (e) {
+          console.warn("IndexedDB Blob fetch error in VideoEditor:", e);
+        }
+        if (isSubscribed) {
+          setVideoSrc(currentAsset.url);
+        }
+      }
+    };
+    loadVideoSrc();
+
+    return () => {
+      isSubscribed = false;
+      if (activeObjUrl) URL.revokeObjectURL(activeObjUrl);
+    };
+  }, [currentAsset?.id]);
 
   useEffect(() => {
     if (videoRef.current && currentClip) {
@@ -247,7 +280,15 @@ export const VideoEditorPage = () => {
             >
               <video
                 ref={videoRef}
-                src={currentAsset?.url || "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"}
+                src={videoSrc || currentAsset?.url || "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"}
+                onLoadedMetadata={(e) => {
+                  if (e.target.duration && currentAsset && currentAsset.duration !== Math.round(e.target.duration * 10) / 10) {
+                    updateAssetDuration(currentAsset.id, e.target.duration);
+                    if (currentClip && currentClip.endTime > e.target.duration) {
+                      updateClipTimestamps(currentClip.id, 0, Math.round(e.target.duration * 10) / 10);
+                    }
+                  }
+                }}
                 onTimeUpdate={handleTimeUpdate}
                 className="w-full h-full object-cover"
               />

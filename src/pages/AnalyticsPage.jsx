@@ -29,7 +29,7 @@ export const AnalyticsPage = () => {
     <div className="space-y-5 max-w-[1600px] mx-auto">
       <PageHeader
         title="Performance Analytics"
-        metaChip="Last 30 Days"
+        metaChip="Simulated Metrics & Platform Benchmarks"
         breadcrumbs={[
           { label: 'CreatorAI', path: '/' },
           { label: 'Analytics' }
