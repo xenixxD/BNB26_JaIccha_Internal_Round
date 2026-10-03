@@ -18,7 +18,7 @@ export const api = {
     }
   },
 
-  async uploadAsset(file, projectId = 'proj_1', fileType = 'video') {
+  async uploadAsset(file, projectId = 'proj_1', fileType = 'video', onProgress) {
     try {
       const formData = new FormData();
       formData.append('file', file);
@@ -27,23 +27,18 @@ export const api = {
 
       const res = await axios.post(`${API_BASE}/assets/upload`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
-        timeout: 15000
+        timeout: 60000,
+        onUploadProgress: (progressEvent) => {
+          if (onProgress && progressEvent.total) {
+            const pct = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+            onProgress(pct);
+          }
+        }
       });
       return res.data;
     } catch (err) {
-      console.warn('Backend upload unavailable, using client blob asset:', err);
-      const url = URL.createObjectURL(file);
-      return {
-        id: `asset_${Date.now().toString(36)}`,
-        project_id: projectId,
-        filename: file.name,
-        file_type: fileType,
-        file_size: file.size,
-        url: url,
-        upload_date: new Date().toISOString().split('T')[0],
-        duration: 160.0,
-        status: 'ready'
-      };
+      console.warn('Backend upload server error:', err);
+      throw err;
     }
   },
 
