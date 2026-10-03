@@ -8,6 +8,26 @@ class SystemHealthResponse(BaseModel):
     gemini_configured: bool
     version: str = "1.0.0"
 
+class ProjectItem(BaseModel):
+    id: str
+    name: str
+    description: str = ""
+    category: str = "General"
+    targetPlatforms: List[str] = []
+    createdAt: str
+    status: str = "Active"
+    thumbnail: Optional[str] = None
+    assetsCount: int = 0
+    clipsCount: int = 0
+
+class ProjectCreateRequest(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    category: Optional[str] = "General"
+    targetPlatforms: Optional[List[str]] = None
+    thumbnail: Optional[str] = None
+    status: Optional[str] = "Active"
+
 class AssetResponse(BaseModel):
     id: str
     project_id: str
@@ -18,6 +38,12 @@ class AssetResponse(BaseModel):
     upload_date: str
     duration: Optional[float] = None
     status: str # "ready" | "processing" | "error"
+
+class ProjectListResponse(BaseModel):
+    projects: List[ProjectItem]
+
+class AssetListResponse(BaseModel):
+    assets: List[AssetResponse]
 
 class MomentCandidate(BaseModel):
     id: str

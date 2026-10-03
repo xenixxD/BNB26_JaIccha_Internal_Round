@@ -7,6 +7,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv, find_dotenv
 
+try:
+    from database import (
+        list_projects, create_project, list_assets, create_asset, list_clips, create_clip,
+        init_db
+    )
+except ModuleNotFoundError:
+    from server.database import (
+        list_projects, create_project, list_assets, create_asset, list_clips, create_clip,
+        init_db
+    )
+
 # Ensure .env configuration is loaded
 env_path = find_dotenv(usecwd=True)
 load_dotenv(env_path)
@@ -42,6 +53,8 @@ except ModuleNotFoundError:
         match_script_to_transcript, generate_ai_content, GEMINI_API_KEY
     )
 
+init_db()
+
 app = FastAPI(
     title="CreatorAI Backend Server",
     description="FastAPI backend providing video clipping, transcription, retention analysis, and A/B hook lab services.",
@@ -70,10 +83,38 @@ def get_health():
         version="1.1.0"
     )
 
+@app.get("/api/projects", response_model=list)
+def get_projects():
+    return list_projects()
+
+@app.post("/api/projects", response_model=dict)
+def create_new_project(request: dict):
+    payload = dict(request)
+    project = create_project(payload)
+    return project
+
+@app.get("/api/assets", response_model=list)
+def get_assets(project_id: Optional[str] = None):
+    return list_assets(project_id)
+
+@app.post("/api/assets", response_model=dict)
+def create_new_asset(request: dict):
+    asset = create_asset(request)
+    return asset
+
+@app.get("/api/clips", response_model=list)
+def get_clips(project_id: Optional[str] = None):
+    return list_clips(project_id)
+
+@app.post("/api/clips", response_model=dict)
+def create_new_clip(request: dict):
+    clip = create_clip(request)
+    return clip
+
 @app.post("/api/assets/upload", response_model=AssetResponse)
 async def upload_asset(
     file: UploadFile = File(...),
-    project_id: str = Form("proj_default"),
+    project_id: str = Form("proj_1"),
     file_type: str = Form("video")
 ):
     try:
@@ -88,16 +129,29 @@ async def upload_asset(
         file_size = os.path.getsize(saved_path)
         file_url = f"/uploads/{saved_filename}"
         
+        asset = create_asset({
+            "id": f"asset_{unique_id}",
+            "projectId": project_id,
+            "filename": file.filename,
+            "fileType": file_type,
+            "fileSize": file_size,
+            "url": file_url,
+            "uploadDate": "Just now",
+            "duration": 160.0 if file_type == "video" else None,
+            "status": "ready",
+            "isDemo": False,
+        })
+
         return AssetResponse(
-            id=f"asset_{unique_id}",
-            project_id=project_id,
-            filename=file.filename,
-            file_type=file_type,
-            file_size=file_size,
-            url=file_url,
-            upload_date="Just now",
-            duration=160.0 if file_type == "video" else None,
-            status="ready"
+            id=asset["id"],
+            project_id=asset["project_id"],
+            filename=asset["filename"],
+            file_type=asset["file_type"],
+            file_size=asset["file_size"],
+            url=asset["url"],
+            upload_date=asset["upload_date"],
+            duration=asset["duration"],
+            status=asset["status"]
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to upload asset: {str(e)}")
@@ -171,6 +225,28 @@ def api_trim_clip(request: ClipTrimRequest):
         end_time=request.end_time,
         aspect_ratio=request.aspect_ratio
     )
+    if task_res.get("status") == "completed":
+        clip_payload = {
+            "id": task_res["clip_id"],
+            "projectId": "proj_1",
+            "assetId": request.asset_id,
+            "title": f"Generated Clip {task_res['clip_id'][-4:]}",
+            "startTime": request.start_time,
+            "endTime": request.end_time,
+            "duration": request.end_time - request.start_time,
+            "aspectRatio": request.aspect_ratio,
+            "potentialScore": 0.0,
+            "ratingLabel": "High Potential",
+            "suggestedHook": "Trimmed highlight clip",
+            "hooks": ["Trimmed highlight clip"],
+            "selectedHookIndex": 0,
+            "caption": "Generated from trim workflow",
+            "hashtags": ["#CreatorAI"],
+            "subtitles": [],
+            "status": "Ready for Review",
+            "exportedUrl": task_res["output_url"],
+        }
+        create_clip(clip_payload)
     return TrimTaskResponse(**task_res)
 
 @app.get("/api/clips/status/{task_id}", response_model=TrimTaskResponse)

@@ -7,15 +7,29 @@
 node_modules/
 dist/
 build/
+.venv/
+.venv-1/
+.pytest_cache/
 server/.venv/
+
+# Generated working directories
+derived/
+sources/
+outputs/
+tmp/
 
 # Server temporary files & media storage
 server/uploads/*
 !server/uploads/.gitkeep
 server/exports/*
 !server/exports/.gitkeep
+server/*.db
+server/*.db-*
 __pycache__/
 *.pyc
+
+# Local workflow state
+.planning/
 
 # IDE & OS files
 .vscode/
