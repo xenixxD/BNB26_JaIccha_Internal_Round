@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore } from '../store/useStore';
+import { api } from '../services/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { MetadataStrip } from '../components/ui/MetadataStrip';
 import { Panel } from '../components/ui/Panel';
@@ -77,7 +78,12 @@ export const ClipStudioPage = () => {
   const [copiedHookId, setCopiedHookId] = useState(null);
   const [selectedHookIndex, setSelectedHookIndex] = useState(0);
   const [scriptInput, setScriptInput] = useState('');
+  const [scriptTitle, setScriptTitle] = useState('Script');
+  const [scriptLibrary, setScriptLibrary] = useState([]);
+  const [selectedScriptVersionId, setSelectedScriptVersionId] = useState('');
+  const [scriptLibraryError, setScriptLibraryError] = useState('');
   const [scriptMatching, setScriptMatching] = useState(false);
+  const [creatingClipForMatch, setCreatingClipForMatch] = useState(null);
   const [scriptMatchError, setScriptMatchError] = useState('');
   const [deletingProject, setDeletingProject] = useState(false);
   const [projectActionError, setProjectActionError] = useState('');
@@ -92,6 +98,31 @@ export const ClipStudioPage = () => {
   useEffect(() => {
     setVideoSrc(activeAsset?.url || null);
   }, [activeAsset?.url]);
+
+  useEffect(() => {
+    if (!activeProjectId || !selectedAssetId) {
+      setScriptLibrary([]);
+      setSelectedScriptVersionId('');
+      setScriptLibraryError('');
+      return undefined;
+    }
+    let cancelled = false;
+    api.getProjectScripts(activeProjectId, selectedAssetId)
+      .then((scripts) => {
+        if (!cancelled) {
+          setScriptLibrary(scripts);
+          setScriptLibraryError('');
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setScriptLibraryError(error.message || 'Could not load saved script versions.');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeProjectId, selectedAssetId]);
 
   useEffect(() => {
     if (videoAssets.length && !videoAssets.some((asset) => asset.id === selectedAssetId)) {
@@ -146,11 +177,35 @@ export const ClipStudioPage = () => {
     setScriptMatching(true);
     setScriptMatchError('');
     try {
-      await runScriptMatcher(selectedAssetId, scriptInput.trim());
+      const result = await runScriptMatcher(
+        selectedAssetId,
+        scriptInput.trim(),
+        scriptTitle.trim()
+      );
+      setSelectedScriptVersionId(result.scriptVersionId);
+      setScriptLibrary(await api.getProjectScripts(activeProjectId, selectedAssetId));
     } catch (error) {
       setScriptMatchError(error.message || 'Could not match this script to the selected footage.');
     } finally {
       setScriptMatching(false);
+    }
+  };
+
+  const handleCreateClipFromMatch = async (match) => {
+    setCreatingClipForMatch(match.id);
+    setScriptMatchError('');
+    try {
+      await generateClip({
+        ...match,
+        assetId: selectedAssetId,
+        title: `Script match - section ${match.script_section_index + 1}`,
+        transcript_excerpt: match.matched_transcript_excerpt,
+      });
+      navigate('/video-editor');
+    } catch (error) {
+      setScriptMatchError(error.message || 'Could not create a clip from this script match.');
+    } finally {
+      setCreatingClipForMatch(null);
     }
   };
 
@@ -500,12 +555,59 @@ export const ClipStudioPage = () => {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <Panel title="Match your script to footage" className="space-y-4">
             <p className="text-body-sm text-ink-secondary">
-              Uses timestamped transcription from the selected video. The first run transcribes and saves it locally;
-              later runs reuse the transcript while the source file remains unchanged.
+              Compares script sections to timestamped transcript windows using a local embedding model.
+              Transcripts and immutable script versions are saved with the project.
             </p>
+            <label className="block space-y-1 text-body-sm font-medium text-ink-primary">
+              Script title
+              <input
+                value={scriptTitle}
+                onChange={(event) => {
+                  setScriptTitle(event.target.value);
+                  setSelectedScriptVersionId('');
+                }}
+                aria-label="Script title"
+                maxLength={120}
+                className="w-full rounded-panel border border-border-subtle bg-white p-2.5 text-body-sm outline-none focus:border-accent"
+              />
+            </label>
+            <label className="block space-y-1 text-body-sm font-medium text-ink-primary">
+              Saved script versions
+              <select
+                value={selectedScriptVersionId}
+                onChange={(event) => {
+                  const version = scriptLibrary
+                    .flatMap((script) => script.versions.map((item) => ({
+                      ...item,
+                      scriptTitle: script.title
+                    })))
+                    .find((item) => item.id === event.target.value);
+                  setSelectedScriptVersionId(event.target.value);
+                  if (version) {
+                    setScriptTitle(version.scriptTitle);
+                    setScriptInput(version.text);
+                  }
+                }}
+                aria-label="Saved script versions"
+                className="w-full rounded-panel border border-border-subtle bg-white p-2.5 text-body-sm outline-none focus:border-accent"
+              >
+                <option value="">New script or current text</option>
+                {scriptLibrary.flatMap((script) => script.versions.map((version) => (
+                  <option key={version.id} value={version.id}>
+                    {script.title} · v{version.version}
+                  </option>
+                )))}
+              </select>
+            </label>
+            {scriptLibraryError && (
+              <p role="alert" className="text-xs text-status-danger">{scriptLibraryError}</p>
+            )}
             <textarea
               value={scriptInput}
-              onChange={(event) => setScriptInput(event.target.value)}
+              onChange={(event) => {
+                setScriptInput(event.target.value);
+                setSelectedScriptVersionId('');
+              }}
               aria-label="Script text"
               placeholder="Paste or type your script. Separate sections with a blank line for clearer matches."
               maxLength={20000}
@@ -533,7 +635,7 @@ export const ClipStudioPage = () => {
           <Panel title={`Footage matches (${scriptMatches.filter((match) => match.assetId === selectedAssetId).length})`} className="space-y-3">
             {scriptMatches.filter((match) => match.assetId === selectedAssetId).length === 0 ? (
               <p className="text-body-sm text-ink-muted">
-                No matches yet. Matches are only shown when transcript evidence overlaps with a script section.
+                No matches yet. Matches appear when transcript windows meet the semantic similarity threshold.
               </p>
             ) : scriptMatches
                 .filter((match) => match.assetId === selectedAssetId)
@@ -543,13 +645,28 @@ export const ClipStudioPage = () => {
                       <span className="text-xs font-semibold text-ink-primary">
                         {match.start_time.toFixed(1)}s–{match.end_time.toFixed(1)}s
                       </span>
-                      <Badge variant="score">{match.confidence_score}% lexical overlap</Badge>
+                      <Badge variant="score">{match.confidence_score.toFixed(1)}% rank score</Badge>
                     </div>
                     <p className="text-body-sm text-ink-secondary">{match.matched_transcript_excerpt}</p>
                     <p className="text-xs text-ink-muted">{match.explanation}</p>
                     <p className="text-[10px] text-ink-muted">
-                      Transcript evidence: {match.transcriptId}
+                      Semantic: {match.semantic_score.toFixed(1)}% ·
+                      Completeness: {match.completeness_score.toFixed(1)}% ·
+                      Duration: {match.duration_score.toFixed(1)}%
                     </p>
+                    <p className="text-[10px] text-ink-muted">
+                      Script version: {match.scriptVersionId} · Transcript: {match.transcriptId}
+                    </p>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      icon={Zap}
+                      onClick={() => handleCreateClipFromMatch(match)}
+                      disabled={creatingClipForMatch !== null}
+                      isLoading={creatingClipForMatch === match.id}
+                    >
+                      Create clip from match
+                    </Button>
                   </article>
                 ))}
           </Panel>

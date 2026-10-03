@@ -1,10 +1,11 @@
 import json
+import hashlib
 import math
 import os
 import sqlite3
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 try:
     from local_storage import DATA_DIR, migrate_legacy_local_data
@@ -207,6 +208,89 @@ def init_db() -> None:
             """
         )
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS scripts (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                source_asset_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (project_id, source_asset_id, title),
+                FOREIGN KEY(project_id) REFERENCES projects(id),
+                FOREIGN KEY(source_asset_id) REFERENCES assets(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS script_versions (
+                id TEXT PRIMARY KEY,
+                script_id TEXT NOT NULL,
+                version INTEGER NOT NULL,
+                content_hash TEXT NOT NULL,
+                text TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE (script_id, version),
+                FOREIGN KEY(script_id) REFERENCES scripts(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS clip_candidates (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                source_asset_id TEXT NOT NULL,
+                script_version_id TEXT NOT NULL,
+                transcript_id TEXT NOT NULL,
+                script_section_index INTEGER NOT NULL,
+                script_section TEXT NOT NULL,
+                start_time REAL NOT NULL,
+                end_time REAL NOT NULL,
+                transcript_text TEXT NOT NULL,
+                semantic_score REAL NOT NULL,
+                completeness_score REAL NOT NULL,
+                visual_score REAL,
+                duration_score REAL NOT NULL,
+                final_score REAL NOT NULL,
+                reasons TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'suggested',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(project_id) REFERENCES projects(id),
+                FOREIGN KEY(source_asset_id) REFERENCES assets(id),
+                FOREIGN KEY(script_version_id) REFERENCES script_versions(id),
+                FOREIGN KEY(transcript_id) REFERENCES transcripts(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS render_jobs (
+                task_id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                asset_id TEXT NOT NULL,
+                clip_id TEXT NOT NULL,
+                draft_id TEXT,
+                status TEXT NOT NULL,
+                progress REAL NOT NULL DEFAULT 0,
+                output_filename TEXT,
+                output_url TEXT,
+                file_size_bytes INTEGER NOT NULL DEFAULT 0,
+                duration_seconds REAL NOT NULL,
+                error_message TEXT,
+                ffmpeg_used INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(project_id) REFERENCES projects(id),
+                FOREIGN KEY(asset_id) REFERENCES assets(id),
+                FOREIGN KEY(draft_id) REFERENCES clip_drafts(id)
+            )
+            """
+        )
+
         conn.commit()
     finally:
         conn.close()
@@ -381,6 +465,10 @@ def update_asset(asset_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
             if transcript_ids:
                 placeholders = ",".join("?" for _ in transcript_ids)
                 conn.execute(
+                    f"DELETE FROM clip_candidates WHERE transcript_id IN ({placeholders})",
+                    transcript_ids,
+                )
+                conn.execute(
                     f"DELETE FROM transcript_segments WHERE transcript_id IN ({placeholders})",
                     transcript_ids,
                 )
@@ -410,6 +498,177 @@ def get_asset(asset_id: str) -> Optional[Dict[str, Any]]:
     try:
         row = conn.execute("SELECT * FROM assets WHERE id = ?", (asset_id,)).fetchone()
         return asset_to_dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def create_render_job(payload: Dict[str, Any]) -> Dict[str, Any]:
+    now = datetime.now(timezone.utc).isoformat()
+    required = ("task_id", "project_id", "asset_id", "clip_id", "duration_seconds")
+    if any(not payload.get(key) for key in required):
+        raise ValueError("Render job task, project, asset, clip, and duration are required")
+    duration = float(payload["duration_seconds"])
+    if not math.isfinite(duration) or duration <= 0:
+        raise ValueError("Render job duration must be positive and finite")
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        asset = conn.execute(
+            "SELECT project_id FROM assets WHERE id = ?",
+            (payload["asset_id"],),
+        ).fetchone()
+        if not asset or asset["project_id"] != payload["project_id"]:
+            raise ValueError("Render job asset must belong to the specified project")
+        if payload.get("draft_id"):
+            draft = conn.execute(
+                "SELECT clip_id FROM clip_drafts WHERE id = ?",
+                (payload["draft_id"],),
+            ).fetchone()
+            if not draft or draft["clip_id"] != payload["clip_id"]:
+                raise ValueError("Render job draft must belong to the specified clip")
+        conn.execute(
+            """
+            INSERT INTO render_jobs (
+                task_id, project_id, asset_id, clip_id, draft_id, status,
+                progress, duration_seconds, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?)
+            """,
+            (
+                payload["task_id"],
+                payload["project_id"],
+                payload["asset_id"],
+                payload["clip_id"],
+                payload.get("draft_id"),
+                duration,
+                now,
+                now,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM render_jobs WHERE task_id = ?",
+            (payload["task_id"],),
+        ).fetchone()
+        if not row:
+            raise RuntimeError("Render job persistence failed")
+        conn.commit()
+        return render_job_to_dict(row)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def update_render_job(task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    allowed_fields = {
+        "status", "progress", "output_filename", "output_url",
+        "file_size_bytes", "duration_seconds", "error_message", "ffmpeg_used",
+    }
+    updates = {key: value for key, value in payload.items() if key in allowed_fields}
+    if not updates:
+        raise ValueError("No supported render job updates were provided")
+    if "status" in updates and updates["status"] not in {"queued", "processing", "completed", "failed"}:
+        raise ValueError("Unsupported render job status")
+    if "progress" in updates:
+        progress = float(updates["progress"])
+        if not math.isfinite(progress) or not 0 <= progress <= 100:
+            raise ValueError("Render job progress must be between 0 and 100")
+        updates["progress"] = progress
+    if updates.get("status") == "completed":
+        if (
+            not updates.get("output_filename")
+            or not updates.get("output_url")
+            or int(updates.get("file_size_bytes", 0)) <= 0
+            or float(updates.get("progress", 0)) < 100
+        ):
+            raise ValueError("Completed render jobs require a validated output and 100% progress")
+    now = datetime.now(timezone.utc).isoformat()
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        current = conn.execute(
+            "SELECT status FROM render_jobs WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+        if not current:
+            raise ValueError(f"Render job not found: {task_id}")
+        if current["status"] in {"completed", "failed"}:
+            raise ValueError(f"Render job is already {current['status']}")
+        next_status = updates.get("status", current["status"])
+        allowed_transitions = {
+            "queued": {"queued", "processing", "failed"},
+            "processing": {"processing", "completed", "failed"},
+        }
+        if next_status not in allowed_transitions[current["status"]]:
+            raise ValueError(
+                f"Cannot transition render job from {current['status']} to {next_status}"
+            )
+        assignments = [f"{key} = ?" for key in updates]
+        values = list(updates.values())
+        assignments.append("updated_at = ?")
+        values.extend((now, task_id))
+        conn.execute(
+            f"UPDATE render_jobs SET {', '.join(assignments)} WHERE task_id = ?",
+            values,
+        )
+        row = conn.execute(
+            "SELECT * FROM render_jobs WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+        conn.commit()
+        return render_job_to_dict(row)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def get_render_job(task_id: str) -> Optional[Dict[str, Any]]:
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT * FROM render_jobs WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+        return render_job_to_dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_render_jobs(project_id: str) -> List[Dict[str, Any]]:
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT * FROM render_jobs
+            WHERE project_id = ?
+            ORDER BY created_at DESC, task_id
+            """,
+            (project_id,),
+        ).fetchall()
+        return [render_job_to_dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def recover_interrupted_render_jobs() -> int:
+    now = datetime.now(timezone.utc).isoformat()
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            """
+            UPDATE render_jobs
+            SET status = 'failed',
+                progress = 0,
+                error_message = 'Server restarted before rendering completed; please retry.',
+                updated_at = ?
+            WHERE status IN ('queued', 'processing')
+            """,
+            (now,),
+        )
+        conn.commit()
+        return cursor.rowcount
     finally:
         conn.close()
 
@@ -465,6 +724,7 @@ def save_transcript(
 
     conn = get_connection()
     try:
+        conn.execute("BEGIN IMMEDIATE")
         asset = conn.execute(
             "SELECT project_id, checksum FROM assets WHERE id = ?",
             (asset_id,),
@@ -569,6 +829,254 @@ def get_cached_transcript(asset_id: str) -> Optional[Dict[str, Any]]:
         conn.close()
 
 
+def create_or_get_script_version(
+    project_id: str,
+    source_asset_id: str,
+    title: str,
+    text: str,
+) -> Dict[str, Any]:
+    normalized_title = title.strip()
+    normalized_text = text.strip()
+    if not normalized_title or not normalized_text:
+        raise ValueError("Script title and text are required")
+    content_hash = hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
+    now = datetime.now(timezone.utc).isoformat()
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        asset = conn.execute(
+            "SELECT project_id FROM assets WHERE id = ?",
+            (source_asset_id,),
+        ).fetchone()
+        if not asset or asset["project_id"] != project_id:
+            raise ValueError("Source asset does not belong to the specified project")
+
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO scripts (
+                id, project_id, source_asset_id, title, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                f"script_{uuid.uuid4().hex}",
+                project_id,
+                source_asset_id,
+                normalized_title,
+                now,
+                now,
+            ),
+        )
+        script = conn.execute(
+            """
+            SELECT * FROM scripts
+            WHERE project_id = ? AND source_asset_id = ? AND title = ?
+            """,
+            (project_id, source_asset_id, normalized_title),
+        ).fetchone()
+        if not script:
+            raise RuntimeError("Script persistence failed")
+
+        matching_version = conn.execute(
+            """
+            SELECT * FROM script_versions
+            WHERE script_id = ? AND content_hash = ?
+            """,
+            (script["id"], content_hash),
+        ).fetchone()
+        latest_version = conn.execute(
+            """
+            SELECT * FROM script_versions
+            WHERE script_id = ? ORDER BY version DESC LIMIT 1
+            """,
+            (script["id"],),
+        ).fetchone()
+        if matching_version:
+            version = matching_version
+        else:
+            next_version = (latest_version["version"] if latest_version else 0) + 1
+            version_id = f"script_version_{uuid.uuid4().hex}"
+            conn.execute(
+                """
+                INSERT INTO script_versions (
+                    id, script_id, version, content_hash, text, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    version_id,
+                    script["id"],
+                    next_version,
+                    content_hash,
+                    normalized_text,
+                    now,
+                ),
+            )
+            conn.execute(
+                "UPDATE scripts SET updated_at = ? WHERE id = ?",
+                (now, script["id"]),
+            )
+            version = conn.execute(
+                "SELECT * FROM script_versions WHERE id = ?",
+                (version_id,),
+            ).fetchone()
+        conn.commit()
+        return {
+            "script_id": script["id"],
+            "project_id": script["project_id"],
+            "source_asset_id": script["source_asset_id"],
+            "title": script["title"],
+            "script_version_id": version["id"],
+            "version": version["version"],
+            "text": version["text"],
+            "created_at": version["created_at"],
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def list_project_scripts(project_id: str, source_asset_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    conn = get_connection()
+    try:
+        parameters: List[Any] = [project_id]
+        query = "SELECT * FROM scripts WHERE project_id = ?"
+        if source_asset_id:
+            query += " AND source_asset_id = ?"
+            parameters.append(source_asset_id)
+        query += " ORDER BY updated_at DESC, title"
+        scripts = conn.execute(query, parameters).fetchall()
+        result: List[Dict[str, Any]] = []
+        for script in scripts:
+            versions = conn.execute(
+                """
+                SELECT id, version, text, created_at FROM script_versions
+                WHERE script_id = ? ORDER BY version DESC
+                """,
+                (script["id"],),
+            ).fetchall()
+            result.append({
+                "id": script["id"],
+                "project_id": script["project_id"],
+                "source_asset_id": script["source_asset_id"],
+                "title": script["title"],
+                "created_at": script["created_at"],
+                "updated_at": script["updated_at"],
+                "versions": [dict(version) for version in versions],
+            })
+        return result
+    finally:
+        conn.close()
+
+
+def save_clip_candidates(
+    candidates: Sequence[Mapping[str, Any]],
+    script_version_id: str,
+    transcript_id: str,
+) -> List[Dict[str, Any]]:
+    conn = get_connection()
+    now = datetime.now(timezone.utc).isoformat()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        if any(
+            candidate["script_version_id"] != script_version_id
+            or candidate["transcript_id"] != transcript_id
+            for candidate in candidates
+        ):
+            raise ValueError("Candidates must share one script version and transcript")
+
+        conn.execute(
+            """
+            DELETE FROM clip_candidates
+            WHERE script_version_id = ? AND transcript_id = ?
+            """,
+            (script_version_id, transcript_id),
+        )
+        persisted: List[Dict[str, Any]] = []
+        for candidate in candidates:
+            candidate_identity = (
+                f"{script_version_id}:{transcript_id}:"
+                f"{candidate['script_section_index']}:"
+                f"{candidate['start_time']:.3f}:{candidate['end_time']:.3f}"
+            )
+            candidate_id = f"candidate_{uuid.uuid5(uuid.NAMESPACE_URL, candidate_identity).hex}"
+            conn.execute(
+                """
+                INSERT INTO clip_candidates (
+                    id, project_id, source_asset_id, script_version_id, transcript_id,
+                    script_section_index, script_section, start_time, end_time,
+                    transcript_text, semantic_score, completeness_score, visual_score,
+                    duration_score, final_score, reasons, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    candidate_id,
+                    candidate["project_id"],
+                    candidate["source_asset_id"],
+                    script_version_id,
+                    transcript_id,
+                    candidate["script_section_index"],
+                    candidate["script_section"],
+                    candidate["start_time"],
+                    candidate["end_time"],
+                    candidate["transcript_text"],
+                    candidate["semantic_score"],
+                    candidate["completeness_score"],
+                    candidate["visual_score"],
+                    candidate["duration_score"],
+                    candidate["final_score"],
+                    json.dumps(candidate["reasons"]),
+                    candidate.get("status", "suggested"),
+                    now,
+                    now,
+                ),
+            )
+            persisted.append({
+                **candidate,
+                "id": candidate_id,
+                "created_at": now,
+                "updated_at": now,
+            })
+        conn.commit()
+        return persisted
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def list_clip_candidates(
+    project_id: str,
+    source_asset_id: Optional[str] = None,
+    script_version_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    conditions = ["project_id = ?"]
+    parameters: List[Any] = [project_id]
+    if source_asset_id:
+        conditions.append("source_asset_id = ?")
+        parameters.append(source_asset_id)
+    if script_version_id:
+        conditions.append("script_version_id = ?")
+        parameters.append(script_version_id)
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT * FROM clip_candidates
+            WHERE {' AND '.join(conditions)}
+            ORDER BY final_score DESC, start_time, id
+            """,
+            parameters,
+        ).fetchall()
+        return [
+            {**dict(row), "reasons": json.loads(row["reasons"])}
+            for row in rows
+        ]
+    finally:
+        conn.close()
+
+
 def delete_asset(asset_id: str) -> Dict[str, Any]:
     conn = get_connection()
     try:
@@ -589,6 +1097,7 @@ def delete_asset(asset_id: str) -> Dict[str, Any]:
             (asset_id,),
         ).fetchall()
         output_urls = [row["url"] for row in output_rows]
+        conn.execute("DELETE FROM render_jobs WHERE asset_id = ?", (asset_id,))
         conn.execute("DELETE FROM outputs WHERE asset_id = ?", (asset_id,))
         transcript_rows = conn.execute(
             "SELECT id FROM transcripts WHERE asset_id = ?",
@@ -598,12 +1107,42 @@ def delete_asset(asset_id: str) -> Dict[str, Any]:
         if transcript_ids:
             placeholders = ",".join("?" for _ in transcript_ids)
             conn.execute(
+                f"DELETE FROM clip_candidates WHERE transcript_id IN ({placeholders})",
+                transcript_ids,
+            )
+            conn.execute(
                 f"DELETE FROM transcript_segments WHERE transcript_id IN ({placeholders})",
                 transcript_ids,
             )
             conn.execute(
                 f"DELETE FROM transcripts WHERE id IN ({placeholders})",
                 transcript_ids,
+            )
+        script_rows = conn.execute(
+            "SELECT id FROM scripts WHERE source_asset_id = ?",
+            (asset_id,),
+        ).fetchall()
+        script_ids = [row["id"] for row in script_rows]
+        if script_ids:
+            placeholders = ",".join("?" for _ in script_ids)
+            version_rows = conn.execute(
+                f"SELECT id FROM script_versions WHERE script_id IN ({placeholders})",
+                script_ids,
+            ).fetchall()
+            version_ids = [row["id"] for row in version_rows]
+            if version_ids:
+                version_placeholders = ",".join("?" for _ in version_ids)
+                conn.execute(
+                    f"DELETE FROM clip_candidates WHERE script_version_id IN ({version_placeholders})",
+                    version_ids,
+                )
+                conn.execute(
+                    f"DELETE FROM script_versions WHERE id IN ({version_placeholders})",
+                    version_ids,
+                )
+            conn.execute(
+                f"DELETE FROM scripts WHERE id IN ({placeholders})",
+                script_ids,
             )
 
         if clip_ids:
@@ -680,6 +1219,7 @@ def delete_project(project_id: str) -> Dict[str, Any]:
         asset_files = [row["url"] for row in asset_rows]
         output_files = [row["url"] for row in output_rows]
 
+        conn.execute("DELETE FROM render_jobs WHERE project_id = ?", (project_id,))
         conn.execute("DELETE FROM outputs WHERE project_id = ?", (project_id,))
         if clip_ids:
             placeholders = ",".join("?" for _ in clip_ids)
@@ -697,12 +1237,42 @@ def delete_project(project_id: str) -> Dict[str, Any]:
         if transcript_ids:
             placeholders = ",".join("?" for _ in transcript_ids)
             conn.execute(
+                f"DELETE FROM clip_candidates WHERE transcript_id IN ({placeholders})",
+                transcript_ids,
+            )
+            conn.execute(
                 f"DELETE FROM transcript_segments WHERE transcript_id IN ({placeholders})",
                 transcript_ids,
             )
             conn.execute(
                 f"DELETE FROM transcripts WHERE id IN ({placeholders})",
                 transcript_ids,
+            )
+        script_rows = conn.execute(
+            "SELECT id FROM scripts WHERE project_id = ?",
+            (project_id,),
+        ).fetchall()
+        script_ids = [row["id"] for row in script_rows]
+        if script_ids:
+            placeholders = ",".join("?" for _ in script_ids)
+            version_rows = conn.execute(
+                f"SELECT id FROM script_versions WHERE script_id IN ({placeholders})",
+                script_ids,
+            ).fetchall()
+            version_ids = [row["id"] for row in version_rows]
+            if version_ids:
+                version_placeholders = ",".join("?" for _ in version_ids)
+                conn.execute(
+                    f"DELETE FROM clip_candidates WHERE script_version_id IN ({version_placeholders})",
+                    version_ids,
+                )
+                conn.execute(
+                    f"DELETE FROM script_versions WHERE id IN ({version_placeholders})",
+                    version_ids,
+                )
+            conn.execute(
+                f"DELETE FROM scripts WHERE id IN ({placeholders})",
+                script_ids,
             )
         conn.execute("DELETE FROM assets WHERE project_id = ?", (project_id,))
         conn.execute("DELETE FROM project_state WHERE project_id = ?", (project_id,))
@@ -845,8 +1415,9 @@ CLIP_FIELDS = {
     "scheduled_date": ("scheduledDate", "scheduled_date"),
     "platform": ("platform",),
     "exported_url": ("exportedUrl", "exported_url"),
+    "metadata": ("metadata",),
 }
-JSON_CLIP_FIELDS = {"hooks", "hashtags", "subtitles"}
+JSON_CLIP_FIELDS = {"hooks", "hashtags", "subtitles", "metadata"}
 
 
 def _merge_clip_payload(existing: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1117,6 +1688,26 @@ def asset_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
     }
 
 
+def render_job_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
+    return {
+        "task_id": row["task_id"],
+        "project_id": row["project_id"],
+        "asset_id": row["asset_id"],
+        "clip_id": row["clip_id"],
+        "draft_id": row["draft_id"],
+        "status": row["status"],
+        "progress": row["progress"],
+        "output_filename": row["output_filename"],
+        "output_url": row["output_url"],
+        "file_size_bytes": row["file_size_bytes"],
+        "duration_seconds": row["duration_seconds"],
+        "error_message": row["error_message"],
+        "ffmpeg_used": bool(row["ffmpeg_used"]),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
 def transcript_to_dict(
     row: sqlite3.Row,
     segment_rows: List[sqlite3.Row],
@@ -1165,6 +1756,7 @@ def clip_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
         "scheduledDate": row["scheduled_date"],
         "platform": row["platform"],
         "exportedUrl": row["exported_url"],
+        "metadata": json.loads(row["metadata"] or "{}"),
     }
 
 

@@ -246,7 +246,10 @@ The FastAPI service currently exposes the following routes:
 | `POST` | `/api/ai/analyze-potential` | Get candidate moments for an asset |
 | `POST` | `/api/ai/analyze-retention` | Get heuristic/AI retention analysis |
 | `POST` | `/api/ai/ab-hooks` | Generate hook variations |
-| `POST` | `/api/ai/script-match` | Match against a persisted asset transcript; returns transcript ID, excerpt, timestamps, and lexical-overlap score |
+| `POST` | `/api/ai/script-match` | Save/reuse an immutable script version, match it against a persisted transcript with local embeddings, and persist ranked candidates |
+| `GET` | `/api/projects/{project_id}/scripts` | List saved scripts and immutable versions; optional `source_asset_id` filter |
+| `GET` | `/api/projects/{project_id}/clip-candidates` | List persisted ranked candidates; optional source-asset and script-version filters |
+| `GET` | `/api/projects/{project_id}/render-jobs` | List durable export-job status and output metadata |
 | `POST` | `/api/ai/generate-content` | Generate hooks, captions, hashtags, and subtitles |
 | `POST` | `/api/clips/trim` | Trim a local uploaded video through FFmpeg |
 | `GET` | `/api/clips/status/{task_id}` | Read current trim task status |
@@ -264,14 +267,19 @@ The backend persists the following metadata in the local SQLite database (`serve
 - **Projects:** name, description/content goal, category, target platforms, status, timestamps, thumbnail, and item counts.
 - **Assets:** project association, filename, type, size, logical local URL, upload date, duration, and status. Saved script text is stored in the asset record.
 - **Transcripts:** provider/model, source checksum, text, duration, and validated timestamped segments tied to the source asset. A transcript is reused only while the asset checksum is unchanged.
+- **Scripts and versions:** scripts are scoped to a project and source asset; changed content creates an immutable, numbered version while unchanged content reuses its existing version.
+- **Clip candidates:** ranked script-to-transcript matches retain source asset, script-version and transcript IDs, timestamps, component scores, reasons, and status.
 - **Clips:** project/asset association, trim range, aspect ratio, hook/caption fields, scheduling metadata, export URL, and status.
 - **Draft versions:** each explicit Save Draft creates a new immutable version with its parent version and timestamp; the latest saved fields are also restored as the current clip.
 - **Project state:** supported transcript/candidate/retention/hook/script-match results are saved and reloaded without requiring analysis to run again.
 - **Outputs:** output metadata links a generated file to its project, source asset, clip, and latest saved draft when available.
+- **Render jobs:** queued, processing, completed, and failed export status is persisted with its project, asset, clip, draft, and output references.
 
 SQLite is initialized automatically. The seed routine inserts demonstration content only when there are no projects. Uploaded source file bytes are stored in `server/data/assets`; generated exports are stored in `server/data/outputs`. The database stores their metadata and logical `/uploads/...` or `/exports/...` references, never the full video/audio bytes. Source uploads use unique server-generated filenames and are not overwritten by later uploads. Deleting an asset from the Asset Library requires confirmation and removes its dependent clips, saved drafts, output metadata, and files referenced through the local upload/export routes.
 
-The Script Matcher uses the selected uploaded video. Its first match request transcribes that stored media using Groq Whisper when `GROQ_API_KEY` is configured, validates and persists the timestamped transcript, and caches it against the asset's SHA-256 checksum. Repeated requests reuse the transcript; changing the source bytes invalidates the old cache. Uploads are checked against media signatures as well as filename extensions. Matching currently reports **local lexical word overlap**, not embedding-based semantic similarity, and returns no match when there is no transcript evidence. Transcription is unavailable without Groq configured; this workflow does not substitute a fabricated transcript.
+The Script Matcher uses the selected uploaded video. Its first match request transcribes that stored media using Groq Whisper when `GROQ_API_KEY` is configured, validates and persists the timestamped transcript, and caches it against the asset's SHA-256 checksum. Repeated requests reuse the transcript; changing the source bytes invalidates the old cache. Uploads are checked against media signatures as well as filename extensions. Script text is split into sections and compared with timestamped transcript windows using the local FastEmbed `BAAI/bge-small-en-v1.5` model. The first matching request downloads model files into the local Hugging Face/FastEmbed cache; subsequent inference runs locally and does not send script or transcript text to an embedding API. The first run requires network access for the model download. Candidates are ranked using semantic similarity, script-detail coverage, and duration fit; scores are ranking signals, not probabilities or measured video quality. Candidate records preserve script-version/transcript provenance and are persisted locally. Each match can be opened as a new editor clip; the clip retains its originating candidate, script version, and transcript IDs in metadata. Transcription is unavailable without Groq configured; this workflow does not substitute a fabricated transcript.
+
+Video trimming persists a render-job record before FFmpeg starts. The job remains queryable through `/api/clips/status/{task_id}` and the project render-job list after a server restart. If the server restarts while a job is queued or processing, startup recovery marks that job failed with an explanation; rendering is currently synchronous and interrupted FFmpeg work must be retried rather than resumed.
 
 On frontend startup, projects, assets, and clips are fetched from the backend. Creating projects/scripts/clips, uploading files, saving analysis state, updating duration/status, saving drafts, and exporting use backend persistence APIs. Editor keystrokes remain in memory until **Save Draft** is clicked; each click makes the next saved version. Draft history in the editor can restore an earlier version for continued editing.
 
@@ -289,13 +297,14 @@ The reset affects only the configured local directory; it does not modify any pr
 
 ## AI behavior
 
-The Google GenAI client initializes when `GEMINI_API_KEY` is available. Some existing analysis and generation functions still contain heuristic/default transcript fallbacks; their results may be generated from built-in sample transcript blocks rather than the uploaded video's actual content. The Script Matcher/transcription workflow is an exception: it uses a checksum-verified local media file and persisted provider transcript, and fails explicitly if transcription is unavailable.
+The Google GenAI client initializes when `GEMINI_API_KEY` is available. Some existing analysis and generation functions still contain heuristic/default transcript fallbacks; their results may be generated from built-in sample transcript blocks rather than the uploaded video's actual content. The Script Matcher uses local embeddings, but its initial transcript still comes from Groq Whisper when configured; audio/video transcription therefore sends media to that external provider. The matcher fails explicitly when transcription or local model inference is unavailable.
 
 Consequently:
 
 - `gemini_configured: true` in `/api/health` means a key was detected; it does not prove successful inference.
 - Candidate scores and retention estimates are not measured platform analytics.
-- Script matching currently uses transcript word overlap rather than semantic embeddings; other analyzers are not yet consistently grounded in stored transcript evidence.
+- Script-match thresholds and ranking weights are initial demo defaults, not yet calibrated against a representative evaluation set; visual evidence is not scored.
+- Other analyzers are not yet consistently grounded in stored transcript evidence.
 - Avoid sending confidential or private media to an external AI provider without appropriate consent and configuration.
 
 ## Validation
@@ -304,10 +313,11 @@ The following checks have been run against the current working tree:
 
 - `npm run build` — passed; Vite emitted a warning that the generated JavaScript bundle exceeds 500 kB.
 - `python -m compileall -q server` — passed.
-- `python -m unittest server.tests.test_local_persistence` — passed all 10 persistence, transcript-cache, upload-validation, deletion, and script-match tests.
-- Pylance syntax checks — no syntax errors in the changed backend modules or persistence tests.
+- `python -m unittest discover -s server/tests -v` — passed all 19 persistence, semantic-matching, and durable-render-job tests.
+- Pylance syntax checks — no syntax errors in the changed backend modules and tests.
+- Local FastEmbed smoke check — relevant script/transcript content produced a ranked match, while two unrelated pairs produced no candidates.
 - `git diff --check` — passed.
-- `npm run lint` — could not run because ESLint is not installed in this workspace.
+- A dedicated lint script is not currently configured in the project package scripts.
 
 These checks validate compilation, frontend bundling, and selected local persistence/API behavior. They do not prove every UI workflow or real FFmpeg video export end to end.
 

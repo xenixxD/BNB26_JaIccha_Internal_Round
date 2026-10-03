@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import List, Optional, Dict, Any, Literal
 
 class SystemHealthResponse(BaseModel):
@@ -124,22 +124,50 @@ class ABHookResponse(BaseModel):
 class ScriptMatchRequest(BaseModel):
     asset_id: str
     script_text: str = Field(min_length=1, max_length=20000)
-    transcript_json: Optional[List[Dict[str, Any]]] = None
-    provider: Optional[str] = "auto"
+    script_title: str = Field(default="Script", min_length=1, max_length=120)
 
 class ScriptMatchItem(BaseModel):
     id: str
+    script_section_index: int
     script_section: str
     matched_transcript_excerpt: str
     start_time: float
     end_time: float
     confidence_score: float
     explanation: str
+    semantic_score: float
+    completeness_score: float
+    duration_score: float
+    reasons: List[str]
+
+class ClipCandidateResponse(BaseModel):
+    id: str
+    project_id: str
+    source_asset_id: str
+    script_version_id: str
+    transcript_id: str
+    script_section_index: int
+    script_section: str
+    start_time: float
+    end_time: float
+    transcript_text: str
+    semantic_score: float
+    completeness_score: float
+    visual_score: Optional[float] = None
+    duration_score: float
+    final_score: float
+    reasons: List[str]
+    status: str
+    created_at: str
+    updated_at: str
 
 class ScriptMatchResponse(BaseModel):
     asset_id: str
+    script_id: str
+    script_version_id: str
     transcript_id: str
     matches: List[ScriptMatchItem]
+    candidates: List[ClipCandidateResponse]
     provider_used: Optional[str] = "auto"
 
 class ContentGenRequest(BaseModel):
@@ -198,11 +226,17 @@ class ClipTrimRequest(BaseModel):
     asset_id: str
     clip_id: Optional[str] = None
     video_url: Optional[str] = None
-    start_time: float
-    end_time: float
-    aspect_ratio: str = "9:16"
+    start_time: float = Field(ge=0)
+    end_time: float = Field(gt=0)
+    aspect_ratio: Literal["9:16", "1:1", "16:9"] = "9:16"
     burn_subtitles: bool = False
     subtitle_lines: Optional[List[Dict[str, Any]]] = None
+
+    @model_validator(mode="after")
+    def validate_trim_range(self):
+        if self.end_time <= self.start_time:
+            raise ValueError("end_time must be greater than start_time")
+        return self
 
 class TrimTaskResponse(BaseModel):
     task_id: str

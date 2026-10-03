@@ -557,37 +557,57 @@ export const useStore = create((set, get) => ({
         }));
       },
 
-      runScriptMatcher: async (assetId, scriptText) => {
+      runScriptMatcher: async (assetId, scriptText, scriptTitle = 'Script') => {
         try {
-          const response = await api.matchScript(assetId, scriptText, get().aiProvider);
+          const response = await api.matchScript(
+            assetId,
+            scriptText,
+            scriptTitle
+          );
           const matches = response.matches.map((match) => ({
             ...match,
             assetId,
+            projectId: get().activeProjectId,
+            scriptId: response.script_id,
+            scriptVersionId: response.script_version_id,
             transcriptId: response.transcript_id
           }));
-          set({ scriptMatches: matches });
-          await get().persistProjectState('scriptMatches', matches);
-          return matches;
+          const projectMatches = [
+            ...get().scriptMatches.filter((match) => match.assetId !== assetId),
+            ...matches
+          ];
+          set({ scriptMatches: projectMatches });
+          await get().persistProjectState('scriptMatches', projectMatches);
+          return {
+            matches,
+            scriptId: response.script_id,
+            scriptVersionId: response.script_version_id,
+            transcriptId: response.transcript_id
+          };
         } catch (error) {
-          set({
-            scriptMatches: [],
-            workspaceError: `Could not match script to footage: ${error.message}`
-          });
+          const remainingMatches = get().scriptMatches.filter(
+            (match) => match.assetId !== assetId
+          );
+          set({ scriptMatches: remainingMatches });
+          await get().persistProjectState('scriptMatches', remainingMatches);
+          set({ workspaceError: `Could not match script to footage: ${error.message}` });
           throw error;
         }
       },
 
       generateClip: async (candidate) => {
+        const startTime = candidate.start_time ?? candidate.startTime ?? 0.0;
+        const endTime = candidate.end_time ?? candidate.endTime ?? startTime + 30.0;
         const clipData = {
           projectId: get().activeProjectId,
           assetId: candidate.assetId || null,
           title: candidate.title || 'Generated Clip',
-          startTime: candidate.start_time || candidate.startTime || 0.0,
-          endTime: candidate.end_time || candidate.endTime || 30.0,
-          duration: round((candidate.end_time || 30.0) - (candidate.start_time || 0.0), 1),
+          startTime,
+          endTime,
+          duration: round(endTime - startTime, 1),
           aspectRatio: '9:16',
-          potentialScore: candidate.potential_score || 90.0,
-          ratingLabel: candidate.rating_label || 'High Potential',
+          potentialScore: candidate.potential_score ?? (candidate.scriptVersionId ? 0 : 90.0),
+          ratingLabel: candidate.rating_label || (candidate.scriptVersionId ? 'Script Match' : 'High Potential'),
           suggestedHook: candidate.suggested_hook || 'Check out this highlight!',
           hooks: [
             `🔥 ${candidate.suggested_hook || 'Check out this key highlight!'}`,
@@ -603,7 +623,17 @@ export const useStore = create((set, get) => ({
           status: 'Draft',
           scheduledDate: null,
           platform: 'Instagram Reels',
-          exportedUrl: null
+          exportedUrl: null,
+          metadata: candidate.scriptVersionId
+            ? {
+                sourceCandidateId: candidate.id,
+                scriptId: candidate.scriptId,
+                scriptVersionId: candidate.scriptVersionId,
+                transcriptId: candidate.transcriptId,
+                rankScore: candidate.confidence_score,
+                matchReasons: candidate.reasons
+              }
+            : {}
         };
         try {
           const newClip = await api.createClip(clipData);

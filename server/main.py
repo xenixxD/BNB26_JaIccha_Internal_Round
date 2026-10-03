@@ -2,7 +2,7 @@ import os
 import uuid
 import logging
 import hashlib
-from typing import Optional
+from typing import Any, Dict, Optional
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -18,14 +18,20 @@ try:
     from database import (
         list_projects, create_project, delete_project, list_assets, create_asset, list_clips, create_clip,
         init_db, update_asset, delete_asset, save_clip_draft, list_clip_drafts, update_clip, save_project_state,
-        get_project_state, create_output, list_outputs, get_asset, get_cached_transcript, save_transcript
+        get_project_state, create_output, list_outputs, get_asset, get_cached_transcript, save_transcript,
+        create_or_get_script_version, list_project_scripts, save_clip_candidates, list_clip_candidates,
+        create_render_job, update_render_job, get_render_job, list_render_jobs,
+        recover_interrupted_render_jobs,
     )
     from local_storage import ASSETS_DIR, OUTPUTS_DIR
 except ModuleNotFoundError:
     from server.database import (
         list_projects, create_project, delete_project, list_assets, create_asset, list_clips, create_clip,
         init_db, update_asset, delete_asset, save_clip_draft, list_clip_drafts, update_clip, save_project_state,
-        get_project_state, create_output, list_outputs, get_asset, get_cached_transcript, save_transcript
+        get_project_state, create_output, list_outputs, get_asset, get_cached_transcript, save_transcript,
+        create_or_get_script_version, list_project_scripts, save_clip_candidates, list_clip_candidates,
+        create_render_job, update_render_job, get_render_job, list_render_jobs,
+        recover_interrupted_render_jobs,
     )
     from server.local_storage import ASSETS_DIR, OUTPUTS_DIR
 
@@ -35,17 +41,21 @@ try:
         PotentialAnalysisRequest, PotentialAnalysisResponse,
         RetentionAnalysisRequest, RetentionAnalysisResponse,
         ABHookRequest, ABHookResponse,
-        ScriptMatchRequest, ScriptMatchItem, ScriptMatchResponse,
+        ScriptMatchRequest, ScriptMatchItem, ScriptMatchResponse, ClipCandidateResponse,
         ContentGenRequest, ContentGenResponse,
         PlannerGenerateRequest, PlannerGenerateResponse,
         AssetTranscriptResponse,
         ClipTrimRequest, TrimTaskResponse
     )
-    from ffmpeg_service import check_ffmpeg, process_video_trim, get_task_status
+    from ffmpeg_service import check_ffmpeg, process_video_trim
     from ai_engine import (
         analyze_video_potential, analyze_retention_risk, generate_ab_hooks,
-        generate_planner_ideas, match_script_to_transcript, generate_ai_content,
+        generate_planner_ideas, generate_ai_content,
         transcribe_media_file, GEMINI_API_KEY, GROQ_API_KEY, genai_client, groq_client
+    )
+    from semantic_matcher import (
+        match_script_to_transcript as match_script_semantically,
+        SemanticMatcherUnavailable,
     )
 except ModuleNotFoundError:
     from server.schemas import (
@@ -53,20 +63,30 @@ except ModuleNotFoundError:
         PotentialAnalysisRequest, PotentialAnalysisResponse,
         RetentionAnalysisRequest, RetentionAnalysisResponse,
         ABHookRequest, ABHookResponse,
-        ScriptMatchRequest, ScriptMatchItem, ScriptMatchResponse,
+        ScriptMatchRequest, ScriptMatchItem, ScriptMatchResponse, ClipCandidateResponse,
         ContentGenRequest, ContentGenResponse,
         PlannerGenerateRequest, PlannerGenerateResponse,
         AssetTranscriptResponse,
         ClipTrimRequest, TrimTaskResponse
     )
-    from server.ffmpeg_service import check_ffmpeg, process_video_trim, get_task_status
+    from server.ffmpeg_service import check_ffmpeg, process_video_trim
     from server.ai_engine import (
         analyze_video_potential, analyze_retention_risk, generate_ab_hooks,
-        generate_planner_ideas, match_script_to_transcript, generate_ai_content,
+        generate_planner_ideas, generate_ai_content,
         transcribe_media_file, GEMINI_API_KEY, GROQ_API_KEY, genai_client, groq_client
+    )
+    from server.semantic_matcher import (
+        match_script_to_transcript as match_script_semantically,
+        SemanticMatcherUnavailable,
     )
 
 init_db()
+interrupted_jobs = recover_interrupted_render_jobs()
+if interrupted_jobs:
+    logging.getLogger(__name__).warning(
+        "Marked %s interrupted render job(s) failed during startup recovery",
+        interrupted_jobs,
+    )
 
 app = FastAPI(
     title="CreatorAI Backend Server",
@@ -258,6 +278,32 @@ def get_clip_draft_versions(clip_id: str):
 def get_project_persisted_state(project_id: str):
     return get_project_state(project_id)
 
+@app.get("/api/projects/{project_id}/scripts", response_model=list)
+def get_project_scripts(project_id: str, source_asset_id: Optional[str] = None):
+    if not any(project["id"] == project_id for project in list_projects()):
+        raise HTTPException(status_code=404, detail="Project not found")
+    if source_asset_id:
+        asset = get_asset(source_asset_id)
+        if not asset or asset["project_id"] != project_id:
+            raise HTTPException(status_code=404, detail="Source asset not found in project")
+    return list_project_scripts(project_id, source_asset_id)
+
+@app.get("/api/projects/{project_id}/clip-candidates", response_model=list)
+def get_project_clip_candidates(
+    project_id: str,
+    source_asset_id: Optional[str] = None,
+    script_version_id: Optional[str] = None,
+):
+    if not any(project["id"] == project_id for project in list_projects()):
+        raise HTTPException(status_code=404, detail="Project not found")
+    return list_clip_candidates(project_id, source_asset_id, script_version_id)
+
+@app.get("/api/projects/{project_id}/render-jobs", response_model=list)
+def get_project_render_jobs(project_id: str):
+    if not any(project["id"] == project_id for project in list_projects()):
+        raise HTTPException(status_code=404, detail="Project not found")
+    return list_render_jobs(project_id)
+
 @app.put("/api/projects/{project_id}/state/{state_key}", response_model=dict)
 def put_project_persisted_state(project_id: str, state_key: str, request: dict):
     if state_key not in {
@@ -448,17 +494,66 @@ def api_planner_generate(request: PlannerGenerateRequest):
 def api_script_match(request: ScriptMatchRequest):
     if not request.script_text.strip():
         raise HTTPException(status_code=422, detail="Script text must not be blank")
+    asset = get_asset(request.asset_id)
+    if not asset:
+        raise HTTPException(status_code=404, detail="Source asset not found")
+    try:
+        script = create_or_get_script_version(
+            project_id=asset["project_id"],
+            source_asset_id=request.asset_id,
+            title=request.script_title,
+            text=request.script_text,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     transcript = _get_or_create_asset_transcript(request.asset_id)
-    raw_matches, provider_used = match_script_to_transcript(
-        script_text=request.script_text,
-        transcript_blocks=transcript["segments"],
-        provider=request.provider or "auto"
+    try:
+        raw_candidates = match_script_semantically(
+            script_text=script["text"],
+            transcript_segments=transcript["segments"],
+            project_id=asset["project_id"],
+            source_asset_id=request.asset_id,
+            script_version_id=script["script_version_id"],
+            transcript_id=transcript["id"],
+        )
+    except SemanticMatcherUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "LOCAL_SEMANTIC_MODEL_UNAVAILABLE",
+                "message": str(exc),
+            },
+        ) from exc
+    candidates = save_clip_candidates(
+        raw_candidates,
+        script_version_id=script["script_version_id"],
+        transcript_id=transcript["id"],
     )
+    matches = [
+        ScriptMatchItem(
+            id=candidate["id"],
+            script_section_index=candidate["script_section_index"],
+            script_section=candidate["script_section"],
+            matched_transcript_excerpt=candidate["transcript_text"],
+            start_time=candidate["start_time"],
+            end_time=candidate["end_time"],
+            confidence_score=round(candidate["final_score"], 1),
+            explanation="; ".join(candidate["reasons"]),
+            semantic_score=candidate["semantic_score"],
+            completeness_score=candidate["completeness_score"],
+            duration_score=candidate["duration_score"],
+            reasons=candidate["reasons"],
+        )
+        for candidate in candidates
+    ]
     return ScriptMatchResponse(
         asset_id=request.asset_id,
+        script_id=script["script_id"],
+        script_version_id=script["script_version_id"],
         transcript_id=transcript["id"],
-        matches=[ScriptMatchItem(**match) for match in raw_matches],
-        provider_used=provider_used
+        matches=matches,
+        candidates=[ClipCandidateResponse(**candidate) for candidate in candidates],
+        provider_used="local-fastembed",
     )
 
 @app.post("/api/ai/generate-content", response_model=ContentGenResponse)
@@ -539,96 +634,143 @@ def api_transcribe_asset(asset_id: str):
 
 @app.post("/api/clips/trim", response_model=TrimTaskResponse)
 def api_trim_clip(request: ClipTrimRequest):
-    asset = next((item for item in list_assets() if item["id"] == request.asset_id), None)
+    asset = get_asset(request.asset_id)
     if not asset:
         raise HTTPException(status_code=404, detail="Source asset not found")
     if asset["fileType"] != "video":
         raise HTTPException(status_code=400, detail="Only video assets can be trimmed")
+    existing_clip = None
+    if request.clip_id:
+        existing_clip = next(
+            (clip for clip in list_clips() if clip["id"] == request.clip_id),
+            None,
+        )
+        if not existing_clip or existing_clip["assetId"] != request.asset_id:
+            raise HTTPException(status_code=404, detail="Clip does not belong to the source asset")
+
     filename = os.path.basename(urlparse(asset["url"] or "").path)
     input_file_path = os.path.abspath(os.path.join(ASSETS_DIR, filename))
     if os.path.commonpath((os.path.abspath(ASSETS_DIR), input_file_path)) != os.path.abspath(ASSETS_DIR):
         raise HTTPException(status_code=400, detail="Invalid source asset reference")
-    if not filename or not os.path.isfile(input_file_path):
-        ffmpeg_ok, _ = check_ffmpeg()
-        return TrimTaskResponse(
-            task_id=str(uuid.uuid4()),
-            clip_id=request.clip_id or f"clip_{uuid.uuid4().hex[:8]}",
-            status="failed",
-            progress=0.0,
-            output_filename=None,
-            output_url=None,
-            file_size_bytes=0,
-            duration_seconds=round(request.end_time - request.start_time, 2),
-            error_message="Source video file not found on server disk for FFmpeg trimming.",
-            ffmpeg_used=ffmpeg_ok
-        )
-        
-    task_res = process_video_trim(
-        asset_id=request.asset_id,
-        input_path=input_file_path,
-        start_time=request.start_time,
-        end_time=request.end_time,
-        aspect_ratio=request.aspect_ratio
-    )
-    if task_res.get("status") == "completed":
-        clip_id = request.clip_id or task_res["clip_id"]
-        if request.clip_id:
-            existing_clip = next((c for c in list_clips() if c["id"] == request.clip_id), None)
-            if not existing_clip or existing_clip["assetId"] != request.asset_id:
-                raise HTTPException(status_code=404, detail="Clip does not belong to the source asset")
-            clip_payload = {
-                "startTime": request.start_time,
-                "endTime": request.end_time,
-                "duration": request.end_time - request.start_time,
-                "aspectRatio": request.aspect_ratio,
-                "status": "Ready for Review",
-                "exportedUrl": task_res["output_url"],
+    task_id = str(uuid.uuid4())
+    clip_id = request.clip_id or f"clip_{task_id[:8]}"
+    duration = round(request.end_time - request.start_time, 2)
+    drafts = list_clip_drafts(clip_id) if existing_clip else []
+    create_render_job({
+        "task_id": task_id,
+        "project_id": asset["project_id"],
+        "asset_id": request.asset_id,
+        "clip_id": clip_id,
+        "draft_id": drafts[-1]["id"] if drafts else None,
+        "duration_seconds": duration,
+    })
+    update_render_job(task_id, {"status": "processing", "progress": 1})
+
+    output_path = None
+    clip_persisted = False
+    task_result: Dict[str, Any]
+    try:
+        if not filename or not os.path.isfile(input_file_path):
+            ffmpeg_ok, _ = check_ffmpeg()
+            task_result = {
+                "task_id": task_id,
+                "clip_id": clip_id,
+                "status": "failed",
+                "progress": 0.0,
+                "output_filename": None,
+                "output_url": None,
+                "file_size_bytes": 0,
+                "duration_seconds": duration,
+                "error_message": "Source video file not found on server disk for FFmpeg trimming.",
+                "ffmpeg_used": ffmpeg_ok,
             }
-            project_id = existing_clip["projectId"]
+            return TrimTaskResponse(**update_render_job(task_id, task_result))
+
+        task_result = process_video_trim(
+            input_path=input_file_path,
+            start_time=request.start_time,
+            end_time=request.end_time,
+            aspect_ratio=request.aspect_ratio,
+            task_id=task_id,
+            clip_id=clip_id,
+        )
+        if task_result["status"] != "completed":
+            return TrimTaskResponse(**update_render_job(task_id, task_result))
+        output_filename = task_result["output_filename"]
+        if not output_filename or task_result["file_size_bytes"] <= 0:
+            raise RuntimeError("FFmpeg reported success without a non-empty output file")
+        output_path = os.path.join(OUTPUTS_DIR, output_filename)
+        if not os.path.isfile(output_path):
+            raise RuntimeError("FFmpeg output file is missing from local storage")
+
+        clip_payload: Dict[str, Any] = {
+            "startTime": request.start_time,
+            "endTime": request.end_time,
+            "duration": request.end_time - request.start_time,
+            "aspectRatio": request.aspect_ratio,
+            "status": "Ready for Review",
+            "exportedUrl": task_result["output_url"],
+        }
+        if existing_clip:
             update_clip(clip_id, clip_payload)
+            project_id = existing_clip["projectId"]
         else:
-            clip_payload = {
+            clip_payload.update({
                 "id": clip_id,
-                "projectId": asset["projectId"],
+                "projectId": asset["project_id"],
                 "assetId": request.asset_id,
                 "title": f"Generated Clip {clip_id[-4:]}",
-                "startTime": request.start_time,
-                "endTime": request.end_time,
-                "duration": request.end_time - request.start_time,
-                "aspectRatio": request.aspect_ratio,
-                "status": "Ready for Review",
-                "exportedUrl": task_res["output_url"],
-            }
-            project_id = asset["projectId"]
-            create_clip(clip_payload)
-
-        task_res["clip_id"] = clip_id
-        drafts = list_clip_drafts(clip_id)
-        try:
-            create_output({
-                "project_id": project_id,
-                "asset_id": request.asset_id,
-                "clip_id": clip_id,
-                "draft_id": drafts[-1]["id"] if drafts else None,
-                "filename": task_res["output_filename"],
-                "url": task_res["output_url"],
-                "file_size": task_res["file_size_bytes"],
-                "metadata": {
-                    "start_time": request.start_time,
-                    "end_time": request.end_time,
-                    "aspect_ratio": request.aspect_ratio,
-                },
             })
-        except Exception as exc:
-            output_path = os.path.join(OUTPUTS_DIR, task_res["output_filename"])
-            if os.path.isfile(output_path):
-                os.remove(output_path)
-            raise HTTPException(status_code=500, detail=f"Failed to persist export metadata: {exc}") from exc
-    return TrimTaskResponse(**task_res)
+            create_clip(clip_payload)
+            project_id = asset["project_id"]
+        clip_persisted = True
+
+        drafts = list_clip_drafts(clip_id)
+        create_output({
+            "project_id": project_id,
+            "asset_id": request.asset_id,
+            "clip_id": clip_id,
+            "draft_id": drafts[-1]["id"] if drafts else None,
+            "filename": output_filename,
+            "url": task_result["output_url"],
+            "file_size": task_result["file_size_bytes"],
+            "metadata": {
+                "start_time": request.start_time,
+                "end_time": request.end_time,
+                "aspect_ratio": request.aspect_ratio,
+            },
+        })
+        return TrimTaskResponse(**update_render_job(task_id, task_result))
+    except Exception as exc:
+        if output_path and os.path.isfile(output_path):
+            os.remove(output_path)
+        if clip_persisted:
+            try:
+                update_clip(clip_id, {"status": "Draft", "exportedUrl": None})
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Could not revert clip %s after export persistence failed",
+                    clip_id,
+                )
+        try:
+            update_render_job(task_id, {
+                "status": "failed",
+                "progress": 0,
+                "output_filename": None,
+                "output_url": None,
+                "file_size_bytes": 0,
+                "error_message": f"Export persistence failed: {exc}",
+            })
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "Could not persist failure for render job %s",
+                task_id,
+            )
+        raise HTTPException(status_code=500, detail=f"Failed to persist export: {exc}") from exc
 
 @app.get("/api/clips/status/{task_id}", response_model=TrimTaskResponse)
 def api_clip_status(task_id: str):
-    res = get_task_status(task_id)
+    res = get_render_job(task_id)
     if not res:
         raise HTTPException(status_code=404, detail="Task ID not found")
     return TrimTaskResponse(**res)

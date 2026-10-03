@@ -171,12 +171,12 @@ export const api = {
     }
   },
 
-  async matchScript(assetId, scriptText, provider = 'auto') {
+  async matchScript(assetId, scriptText, scriptTitle = 'Script') {
     try {
       const res = await axios.post(`${API_BASE}/ai/script-match`, {
         asset_id: assetId,
         script_text: scriptText,
-        provider: provider
+        script_title: scriptTitle
       }, { timeout: 180000 });
       return res.data;
     } catch (err) {
@@ -185,6 +185,28 @@ export const api = {
         (typeof detail === 'string' ? detail : detail?.message) || err.message || 'Script matching failed'
       );
     }
+  },
+
+  async getProjectScripts(projectId, sourceAssetId) {
+    const res = await axios.get(`${API_BASE}/projects/${encodeURIComponent(projectId)}/scripts`, {
+      params: sourceAssetId ? { source_asset_id: sourceAssetId } : undefined
+    });
+    return res.data;
+  },
+
+  async getProjectClipCandidates(projectId, sourceAssetId, scriptVersionId) {
+    const params = {};
+    if (sourceAssetId) params.source_asset_id = sourceAssetId;
+    if (scriptVersionId) params.script_version_id = scriptVersionId;
+    const res = await axios.get(`${API_BASE}/projects/${encodeURIComponent(projectId)}/clip-candidates`, {
+      params
+    });
+    return res.data;
+  },
+
+  async getProjectRenderJobs(projectId) {
+    const res = await axios.get(`${API_BASE}/projects/${encodeURIComponent(projectId)}/render-jobs`);
+    return res.data;
   },
 
   async generateContent(clipId, transcriptSegment, platform = 'instagram_reels', tone = 'curious', topic = 'AI Creator Workflow', provider = 'auto') {

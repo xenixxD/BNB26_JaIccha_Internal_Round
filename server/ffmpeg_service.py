@@ -2,7 +2,7 @@ import os
 import shutil
 import subprocess
 import uuid
-from typing import Dict, Any, Optional
+from typing import List, Optional, TypedDict
 
 try:
     from local_storage import ASSETS_DIR, OUTPUTS_DIR
@@ -12,8 +12,19 @@ except ModuleNotFoundError:
 EXPORTS_DIR = OUTPUTS_DIR
 UPLOADS_DIR = ASSETS_DIR
 
-# Task storage in memory
-TASKS: Dict[str, Dict[str, Any]] = {}
+
+class TrimTaskData(TypedDict):
+    task_id: str
+    clip_id: str
+    status: str
+    progress: float
+    output_filename: Optional[str]
+    output_url: Optional[str]
+    file_size_bytes: int
+    duration_seconds: float
+    error_message: Optional[str]
+    ffmpeg_used: bool
+
 
 def check_ffmpeg() -> tuple[bool, Optional[str]]:
     """Checks if FFmpeg binary is available on system path, via imageio_ffmpeg, or standard locations."""
@@ -55,18 +66,20 @@ def get_aspect_ratio_filter(aspect_ratio: str) -> str:
     return "scale=1080:1920"
 
 def process_video_trim(
-    asset_id: str,
     input_path: str,
     start_time: float,
     end_time: float,
-    aspect_ratio: str = "9:16"
-) -> Dict[str, Any]:
-    task_id = str(uuid.uuid4())
-    clip_id = f"clip_{task_id[:8]}"
+    aspect_ratio: str = "9:16",
+    task_id: Optional[str] = None,
+    clip_id: Optional[str] = None,
+) -> TrimTaskData:
+    task_id = task_id or str(uuid.uuid4())
+    clip_id = clip_id or f"clip_{task_id[:8]}"
+    task_data: TrimTaskData
     
     ffmpeg_ok, ffmpeg_bin = check_ffmpeg()
     
-    if not ffmpeg_ok:
+    if not ffmpeg_ok or not ffmpeg_bin:
         task_data = {
             "task_id": task_id,
             "clip_id": clip_id,
@@ -79,7 +92,6 @@ def process_video_trim(
             "error_message": "FFmpeg binary not detected on host system. Export is disabled (Preview Mode active).",
             "ffmpeg_used": False
         }
-        TASKS[task_id] = task_data
         return task_data
 
     duration = round(end_time - start_time, 2)
@@ -88,7 +100,7 @@ def process_video_trim(
     vf_filter = get_aspect_ratio_filter(aspect_ratio)
     
     # Run FFmpeg command synchronously or backgrounded
-    cmd = [
+    cmd: List[str] = [
         ffmpeg_bin,
         "-y",
         "-ss", str(start_time),
@@ -146,8 +158,4 @@ def process_video_trim(
             "ffmpeg_used": True
         }
 
-    TASKS[task_id] = task_data
     return task_data
-
-def get_task_status(task_id: str) -> Optional[Dict[str, Any]]:
-    return TASKS.get(task_id)
