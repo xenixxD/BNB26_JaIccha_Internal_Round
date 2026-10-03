@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useStore } from '../store/useStore';
-import { Eye, EyeOff, Lock, Mail, User, Sparkles, ArrowRight } from 'lucide-react';
+import { Eye, EyeOff, Lock, Mail, User, ArrowRight } from 'lucide-react';
+import { Button } from '../components/ui/Button';
+import { Input } from '../components/ui/Input';
 
 export const AuthPage = () => {
   const navigate = useNavigate();
@@ -16,85 +17,65 @@ export const AuthPage = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4">
-      <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-8 space-y-6 shadow-2xl">
+    <div className="min-h-screen bg-canvas text-ink-primary flex items-center justify-center p-4">
+      <div className="w-full max-w-md bg-white border border-border-subtle rounded-panel p-8 space-y-6 shadow-sm">
         <div className="text-center space-y-2">
-          <div className="inline-flex w-12 h-12 rounded-2xl bg-gradient-to-tr from-indigo-600 to-violet-500 items-center justify-center text-white font-bold text-xl shadow-lg shadow-indigo-500/30 mb-2">
+          <div className="inline-flex w-10 h-10 rounded-btn bg-accent items-center justify-center text-white font-bold text-lg shadow-sm mb-1">
             C
           </div>
-          <h1 className="text-2xl font-bold text-white">
+          <h1 className="text-title-page font-bold text-ink-primary">
             {isSignUp ? 'Create your Account' : 'Welcome to CreatorAI'}
           </h1>
-          <p className="text-xs text-slate-400">
+          <p className="text-body-sm text-ink-muted">
             Professional AI-Powered Creator Operating Platform
           </p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {isSignUp && (
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1">Full Name</label>
-              <div className="relative">
-                <User className="w-4 h-4 text-slate-400 absolute left-3 top-3 pointer-events-none" />
-                <input
-                  type="text"
-                  required
-                  placeholder="Sohan Das"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-            </div>
+            <Input label="FULL NAME" placeholder="Sohan Das" icon={User} required />
           )}
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1">Email Address</label>
-            <div className="relative">
-              <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-3 pointer-events-none" />
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
-              />
-            </div>
-          </div>
+          <Input
+            label="EMAIL ADDRESS"
+            type="email"
+            icon={Mail}
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
 
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1">Password</label>
+            <label className="block text-micro text-ink-muted uppercase tracking-widest font-semibold mb-1">PASSWORD</label>
             <div className="relative">
-              <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3 pointer-events-none" />
+              <Lock className="w-4 h-4 text-ink-muted absolute left-2.5 top-2.5 pointer-events-none stroke-[1.75]" />
               <input
                 type={showPassword ? 'text' : 'password'}
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-9 py-2.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
+                className="w-full h-[32px] bg-white border border-border-subtle hover:border-border-strong focus:border-accent text-ink-primary text-xs rounded-btn pl-8 pr-8"
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-3 text-slate-400 hover:text-slate-200"
+                className="absolute right-2.5 top-2 text-ink-muted hover:text-ink-primary"
               >
-                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
               </button>
             </div>
           </div>
 
-          <button
-            type="submit"
-            className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs py-3 rounded-xl shadow-lg shadow-indigo-600/30 flex items-center justify-center gap-2 transition-all"
-          >
-            <span>{isSignUp ? 'Sign Up & Launch' : 'Sign In to Workspace'}</span>
-            <ArrowRight className="w-4 h-4" />
-          </button>
+          <Button type="submit" variant="primary" className="w-full h-[36px]" icon={ArrowRight}>
+            {isSignUp ? 'Sign Up & Launch' : 'Sign In to Workspace'}
+          </Button>
         </form>
 
-        <div className="pt-4 border-t border-slate-800 text-center text-xs text-slate-400">
+        <div className="pt-4 border-t border-border-subtle text-center text-body-sm text-ink-muted">
           <span>{isSignUp ? 'Already have an account?' : "Don't have an account?"} </span>
           <button
             onClick={() => setIsSignUp(!isSignUp)}
-            className="text-indigo-400 font-semibold hover:underline"
+            className="text-accent font-semibold hover:underline"
           >
             {isSignUp ? 'Sign In' : 'Create One'}
           </button>

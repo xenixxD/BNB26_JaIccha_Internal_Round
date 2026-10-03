@@ -1,22 +1,25 @@
 import React from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import { useStore } from '../../store/useStore';
 import {
   LayoutDashboard,
   FolderKanban,
   FolderSearch,
   Sparkles,
+  FileCheck,
+  Film,
   Video,
   CalendarDays,
   BarChart3,
   Settings,
   Plus,
-  Layers,
-  ChevronRight,
-  LogOut
+  ChevronsUpDown,
+  LogOut,
+  Layers
 } from 'lucide-react';
 
 export const Sidebar = ({ onOpenNewProjectModal }) => {
+  const location = useLocation();
   const { projects, activeProjectId, setActiveProject, user } = useStore();
 
   const activeProj = projects.find((p) => p.id === activeProjectId) || projects[0];
@@ -25,7 +28,9 @@ export const Sidebar = ({ onOpenNewProjectModal }) => {
     { name: 'Dashboard', path: '/', icon: LayoutDashboard },
     { name: 'Projects', path: '/projects', icon: FolderKanban, badge: projects.length },
     { name: 'Asset Library', path: '/assets', icon: FolderSearch },
-    { name: 'AI Clip Studio', path: '/clip-studio', icon: Sparkles, highlight: true },
+    { name: 'AI Potential Analyzer', path: '/clip-studio', icon: Sparkles },
+    { name: 'AI Script Matcher', path: '/clip-studio', icon: FileCheck },
+    { name: 'AI Clip Studio', path: '/clip-studio', icon: Film },
     { name: 'Video Editor', path: '/video-editor', icon: Video },
     { name: 'Content Planner', path: '/planner', icon: CalendarDays },
     { name: 'Analytics', path: '/analytics', icon: BarChart3 },
@@ -33,105 +38,110 @@ export const Sidebar = ({ onOpenNewProjectModal }) => {
   ];
 
   return (
-    <aside className="w-64 bg-slate-900 border-r border-slate-800 text-slate-300 flex flex-col justify-between shrink-0 select-none h-screen sticky top-0">
-      {/* Top Section: Brand & Nav */}
-      <div>
-        {/* Brand Header */}
-        <div className="p-5 border-b border-slate-800 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-violet-500 flex items-center justify-center text-white shadow-lg shadow-indigo-500/20 font-bold text-lg tracking-wider">
-              C
-            </div>
-            <div>
-              <h1 className="font-bold text-slate-100 text-base leading-tight tracking-tight">CreatorAI</h1>
-              <span className="text-[10px] text-indigo-400 font-semibold uppercase tracking-widest block">Operating Studio</span>
-            </div>
+    <aside className="w-[208px] bg-navy-sidebar text-navy-text flex flex-col justify-between shrink-0 select-none h-screen sticky top-0 border-r border-slate-800 z-20">
+      {/* Top Section */}
+      <div className="flex flex-col min-h-0">
+        {/* Brand Area */}
+        <div className="px-4 py-3 flex items-center gap-2.5 border-b border-slate-800/80">
+          <div className="w-7 h-7 rounded-[6px] bg-accent flex items-center justify-center text-white font-bold text-sm shadow-sm shrink-0">
+            C
+          </div>
+          <div className="truncate">
+            <h1 className="font-bold text-white text-[13px] leading-tight truncate">CreatorAI</h1>
+            <span className="text-micro text-navy-label uppercase tracking-widest block font-semibold">PRO WORKSPACE</span>
           </div>
         </div>
 
-        {/* Active Project Selector */}
-        <div className="p-3 border-b border-slate-800/80 bg-slate-950/40">
-          <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block mb-1.5 px-2">
-            Active Workspace
-          </label>
-          <div className="relative">
-            <select
-              value={activeProjectId}
-              onChange={(e) => setActiveProject(e.target.value)}
-              className="w-full bg-slate-800 text-slate-200 text-xs font-medium rounded-lg border border-slate-700/80 px-3 py-2 pr-8 focus:outline-none focus:border-indigo-500 transition-colors cursor-pointer appearance-none"
-            >
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-            <Layers className="w-3.5 h-3.5 text-slate-400 absolute right-3 top-2.5 pointer-events-none" />
-          </div>
-        </div>
-
-        {/* CTA Button */}
+        {/* Primary CTA */}
         <div className="p-3">
           <button
             onClick={onOpenNewProjectModal}
-            className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs py-2.5 px-3 rounded-lg flex items-center justify-center gap-2 shadow-md shadow-indigo-600/20 transition-all active:scale-[0.98]"
+            className="w-full h-[32px] bg-accent hover:bg-accent-hover text-white text-xs font-semibold rounded-btn flex items-center justify-center gap-1.5 shadow-sm transition-colors cursor-pointer"
           >
-            <Plus className="w-4 h-4 stroke-[2.5]" />
+            <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
             <span>New Project</span>
           </button>
         </div>
 
-        {/* Navigation Menu */}
-        <nav className="px-2 space-y-1 mt-1">
-          {navItems.map((item) => {
+        {/* Section Label */}
+        <div className="px-4 pt-1 pb-1.5 text-micro text-navy-label uppercase tracking-widest font-semibold">
+          Platform Navigation
+        </div>
+
+        {/* Nav Items List */}
+        <nav className="px-2 space-y-0.5 overflow-y-auto max-h-[calc(100vh-220px)]">
+          {navItems.map((item, idx) => {
             const Icon = item.icon;
+            const isActive = location.pathname === item.path && (
+              idx !== 3 && idx !== 4 || location.pathname === '/clip-studio'
+            );
+
             return (
               <NavLink
-                key={item.path}
+                key={idx}
                 to={item.path}
-                className={({ isActive }) =>
-                  `flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-medium transition-all group ${
-                    isActive
-                      ? 'bg-indigo-600/15 text-indigo-400 font-semibold border-l-2 border-indigo-500 pl-2.5'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-                  }`
-                }
+                className={({ isActive: linkActive }) => {
+                  const active = linkActive && (item.name !== 'AI Potential Analyzer' && item.name !== 'AI Script Matcher' || location.pathname === '/clip-studio');
+                  return `h-[32px] flex items-center justify-between px-2.5 rounded-btn text-xs font-medium transition-all relative ${
+                    active
+                      ? 'bg-navy-active text-white font-semibold'
+                      : 'text-navy-text hover:text-white hover:bg-navy-hover'
+                  }`;
+                }}
               >
-                <div className="flex items-center gap-2.5">
-                  <Icon className={`w-4 h-4 transition-colors ${item.highlight ? 'text-indigo-400' : 'text-slate-400 group-hover:text-slate-200'}`} />
-                  <span>{item.name}</span>
-                </div>
-
-                {item.badge !== undefined && (
-                  <span className="bg-slate-800 text-slate-300 text-[10px] font-bold px-2 py-0.5 rounded-full border border-slate-700/60">
-                    {item.badge}
-                  </span>
-                )}
-                {item.highlight && (
-                  <span className="bg-indigo-500/20 text-indigo-300 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded">
-                    AI
-                  </span>
-                )}
+                {({ isActive: linkActive }) => {
+                  const active = linkActive && (item.name !== 'AI Potential Analyzer' && item.name !== 'AI Script Matcher' || location.pathname === '/clip-studio');
+                  return (
+                    <>
+                      {active && (
+                        <span className="absolute left-0 top-1 bottom-1 w-[3px] bg-navy-accent rounded-r" />
+                      )}
+                      <div className="flex items-center gap-2 truncate">
+                        <Icon className={`w-4 h-4 shrink-0 ${active ? 'text-white' : 'text-navy-label'}`} />
+                        <span className="truncate">{item.name}</span>
+                      </div>
+                      {item.badge !== undefined && (
+                        <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-chip bg-slate-800 text-navy-text">
+                          {item.badge}
+                        </span>
+                      )}
+                    </>
+                  );
+                }}
               </NavLink>
             );
           })}
         </nav>
       </div>
 
-      {/* User Footer Profile */}
-      <div className="p-3 border-t border-slate-800 bg-slate-950/60 flex items-center justify-between">
-        <div className="flex items-center gap-2.5 overflow-hidden">
-          <div className="w-8 h-8 rounded-lg bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 font-bold text-xs shrink-0">
-            {user.avatar || 'SD'}
+      {/* Pinned Bottom Area */}
+      <div className="border-t border-slate-800/80 bg-navy-sidebar p-2 space-y-1">
+        {/* Workspace Switcher */}
+        <div className="p-2 rounded-btn hover:bg-navy-hover transition-colors flex items-center justify-between cursor-pointer">
+          <div className="flex items-center gap-2 truncate">
+            <div className="w-5 h-5 rounded-[4px] bg-navy-active text-white font-mono text-[10px] font-bold flex items-center justify-center shrink-0">
+              {activeProj?.name.charAt(0) || 'W'}
+            </div>
+            <div className="truncate">
+              <span className="text-xs font-semibold text-white block truncate">{activeProj?.name || 'Workspace'}</span>
+              <span className="text-[10px] text-navy-label block truncate">Team Plan</span>
+            </div>
           </div>
-          <div className="truncate">
-            <h4 className="text-xs font-semibold text-slate-200 truncate">{user.name}</h4>
-            <span className="text-[10px] text-slate-400 truncate block">{user.role}</span>
-          </div>
+          <ChevronsUpDown className="w-3.5 h-3.5 text-navy-label shrink-0" />
         </div>
-        <NavLink to="/auth" className="text-slate-400 hover:text-slate-200 p-1.5 rounded-md hover:bg-slate-800 transition-colors" title="Sign Out">
-          <LogOut className="w-3.5 h-3.5" />
-        </NavLink>
+
+        {/* User Info Row */}
+        <div className="px-2 py-1.5 flex items-center justify-between border-t border-slate-800/60 pt-2">
+          <div className="flex items-center gap-2 truncate">
+            <div className="w-6 h-6 rounded-full bg-accent text-white text-[10px] font-bold flex items-center justify-center shrink-0">
+              {user.avatar || 'SD'}
+            </div>
+            <span className="text-xs font-medium text-white truncate">{user.name}</span>
+          </div>
+          <NavLink to="/auth" className="text-navy-label hover:text-white p-1 rounded transition-colors" title="Sign Out">
+            <LogOut className="w-3.5 h-3.5" />
+          </NavLink>
+        </div>
       </div>
     </aside>
   );

@@ -1,74 +1,78 @@
 import React from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useStore } from '../../store/useStore';
-import { Search, Bell, Upload, Sparkles, Folder } from 'lucide-react';
+import { Search, Bell, HelpCircle, Zap, CheckCircle2, AlertTriangle, User } from 'lucide-react';
 
 export const Header = ({ onOpenUploadModal }) => {
   const location = useLocation();
-  const { searchQuery, setSearchQuery, projects, activeProjectId } = useStore();
+  const navigate = useNavigate();
+  const { searchQuery, setSearchQuery, projects, activeProjectId, systemHealth, user } = useStore();
 
   const activeProj = projects.find((p) => p.id === activeProjectId) || projects[0];
 
-  const getPageTitle = (pathname) => {
-    switch (pathname) {
-      case '/': return { title: 'Dashboard', subtitle: 'Overview of creator operations & clip generation' };
-      case '/projects': return { title: 'Projects', subtitle: 'Manage content projects and workspaces' };
-      case '/assets': return { title: 'Smart Asset Manager', subtitle: 'Upload and organize videos, scripts, audio & media' };
-      case '/clip-studio': return { title: 'AI Clip Studio', subtitle: 'Analyze video potential & match scripts to transcript' };
-      case '/video-editor': return { title: 'Video Editor Workspace', subtitle: 'Trim 9:16 vertical clips, format hooks & subtitles' };
-      case '/planner': return { title: 'Content Planner', subtitle: 'Kanban & calendar scheduling for social platforms' };
-      case '/analytics': return { title: 'Analytics', subtitle: 'Track views, retention, and clip performance' };
-      case '/settings': return { title: 'Settings', subtitle: 'Preferences, default platforms & API keys' };
-      case '/auth': return { title: 'Authentication', subtitle: 'Sign in to your CreatorAI operating platform' };
-      default: return { title: 'CreatorAI Platform', subtitle: 'AI-Powered Creator Operating Platform' };
-    }
-  };
-
-  const pageInfo = getPageTitle(location.pathname);
-
   return (
-    <header className="h-16 bg-slate-900 border-b border-slate-800 px-6 flex items-center justify-between sticky top-0 z-10 shadow-sm">
-      {/* Left Title & Breadcrumbs */}
-      <div>
-        <div className="flex items-center gap-2 text-[11px] text-slate-400 font-medium">
-          <span className="flex items-center gap-1 hover:text-slate-300">
-            <Folder className="w-3 h-3 text-indigo-400" />
-            {activeProj?.name || 'Workspace'}
-          </span>
-          <span>/</span>
-          <span className="text-slate-200 capitalize font-semibold">{pageInfo.title}</span>
+    <header className="h-[56px] bg-white border-b border-border-subtle px-5 flex items-center justify-between sticky top-0 z-10 shadow-none">
+      {/* Left Breadcrumb Indicator */}
+      <div className="flex items-center gap-2 text-body-sm font-medium">
+        <span className="text-ink-muted">CreatorAI</span>
+        <span className="text-border-strong">/</span>
+        <div className="flex items-center gap-1.5 font-semibold text-ink-primary">
+          <span className="w-2 h-2 rounded-full bg-status-success inline-block" />
+          <span>{activeProj?.name || 'Workspace'}</span>
         </div>
-        <h2 className="text-base font-bold text-slate-100 leading-tight">{pageInfo.title}</h2>
       </div>
 
-      {/* Right Controls & Actions */}
-      <div className="flex items-center gap-3">
-        {/* Global Search */}
-        <div className="relative w-64 hidden sm:block">
-          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5 pointer-events-none" />
-          <input
-            type="text"
-            placeholder="Search projects, clips, assets..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-slate-800 text-slate-200 text-xs font-medium rounded-lg border border-slate-700/80 pl-9 pr-3 py-2 focus:outline-none focus:border-indigo-500 transition-colors"
-          />
+      {/* Center Search Input */}
+      <div className="relative w-[320px] hidden md:block">
+        <Search className="w-3.5 h-3.5 text-ink-muted absolute left-3 top-2.5 pointer-events-none stroke-[1.75]" />
+        <input
+          type="text"
+          placeholder="Search clips, assets, projects..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="w-full h-[32px] bg-surface-inset border border-border-subtle focus:border-accent text-ink-primary text-xs rounded-btn pl-8 pr-12 transition-colors font-sans"
+        />
+        <div className="absolute right-2.5 top-1.5 px-1.5 py-0.5 bg-white border border-border-subtle text-ink-muted text-[10px] font-mono rounded-chip">
+          ⌘K
+        </div>
+      </div>
+
+      {/* Right Cluster */}
+      <div className="flex items-center gap-2.5">
+        {/* System Health Status Pill */}
+        <div className={`h-[28px] px-2.5 rounded-chip text-[11px] font-mono font-medium flex items-center gap-1.5 border ${
+          systemHealth.ffmpeg_available
+            ? 'bg-status-success-soft text-status-success border-emerald-200'
+            : 'bg-status-warning-soft text-status-warning border-amber-200'
+        }`}>
+          <span className={`w-1.5 h-1.5 rounded-full ${systemHealth.ffmpeg_available ? 'bg-status-success animate-pulse' : 'bg-status-warning'}`} />
+          <span className="hidden sm:inline">{systemHealth.ffmpeg_available ? 'FFmpeg Active' : 'Preview Mode'}</span>
         </div>
 
-        {/* Quick Upload Action */}
-        <button
-          onClick={onOpenUploadModal}
-          className="bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium text-xs py-2 px-3 rounded-lg border border-slate-700 flex items-center gap-1.5 transition-colors shadow-sm"
-        >
-          <Upload className="w-3.5 h-3.5 text-indigo-400" />
-          <span className="hidden md:inline">Upload Asset</span>
+        {/* Help Icon */}
+        <button className="w-[28px] h-[28px] rounded-btn border border-border-subtle hover:border-border-strong bg-white flex items-center justify-center text-ink-muted hover:text-ink-primary transition-colors cursor-pointer" title="Help & Documentation">
+          <HelpCircle className="w-3.5 h-3.5 stroke-[1.75]" />
         </button>
 
-        {/* Notifications */}
-        <button className="relative bg-slate-800 hover:bg-slate-700 p-2 rounded-lg border border-slate-700 text-slate-300 transition-colors">
-          <Bell className="w-4 h-4" />
-          <span className="w-2 h-2 rounded-full bg-indigo-500 absolute top-1.5 right-1.5 animate-pulse" />
+        {/* Notifications Icon with Red Dot */}
+        <button className="w-[28px] h-[28px] rounded-btn border border-border-subtle hover:border-border-strong bg-white flex items-center justify-center text-ink-muted hover:text-ink-primary transition-colors relative cursor-pointer" title="Notifications">
+          <Bell className="w-3.5 h-3.5 stroke-[1.75]" />
+          <span className="w-2 h-2 rounded-full bg-status-dot absolute top-1 right-1 border border-white" />
         </button>
+
+        {/* Primary Action Button: Run AI Task */}
+        <button
+          onClick={() => navigate('/clip-studio')}
+          className="h-[32px] px-3 bg-accent hover:bg-accent-hover text-white font-semibold text-xs rounded-btn flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer"
+        >
+          <Zap className="w-3.5 h-3.5 stroke-[2] fill-white" />
+          <span className="hidden sm:inline">Run AI Task</span>
+        </button>
+
+        {/* User Avatar */}
+        <div className="w-[28px] h-[28px] rounded-full bg-accent text-white font-bold text-[11px] flex items-center justify-center shadow-sm cursor-pointer ml-1">
+          {user.avatar || 'SD'}
+        </div>
       </div>
     </header>
   );
