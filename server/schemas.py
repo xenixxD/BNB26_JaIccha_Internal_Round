@@ -92,3 +92,4 @@ class TrimTaskResponse(BaseModel):
     duration_seconds: Optional[float] = None
     error_message: Optional[str] = None
     ffmpeg_used: bool
+

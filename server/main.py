@@ -6,15 +6,40 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTa
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from schemas import (
-    SystemHealthResponse, AssetResponse,
-    PotentialAnalysisRequest, PotentialAnalysisResponse,
-    ScriptMatchRequest, ScriptMatchResponse,
-    ContentGenRequest, ContentGenResponse,
-    ClipTrimRequest, TrimTaskResponse
+from server.database.asset_service import AssetService
+from server.database.project_service import ProjectService
+from server.storage.storage_service import StorageService
+from server.creatorai.pipeline import CreatorAIPipeline
+
+try:
+    from .schemas import (
+        SystemHealthResponse, AssetResponse,
+        PotentialAnalysisRequest, PotentialAnalysisResponse,
+        ScriptMatchRequest, ScriptMatchResponse,
+        ContentGenRequest, ContentGenResponse,
+        ClipTrimRequest, TrimTaskResponse
+    )
+    from .ffmpeg_service import check_ffmpeg, process_video_trim, get_task_status, UPLOADS_DIR, EXPORTS_DIR
+    from .ai_engine import analyze_video_potential, match_script_to_transcript, generate_ai_content, GEMINI_API_KEY
+except ImportError:  # pragma: no cover
+    from schemas import (
+        SystemHealthResponse, AssetResponse,
+        PotentialAnalysisRequest, PotentialAnalysisResponse,
+        ScriptMatchRequest, ScriptMatchResponse,
+        ContentGenRequest, ContentGenResponse,
+        ClipTrimRequest, TrimTaskResponse
+    )
+    from ffmpeg_service import check_ffmpeg, process_video_trim, get_task_status, UPLOADS_DIR, EXPORTS_DIR
+    from ai_engine import analyze_video_potential, match_script_to_transcript, generate_ai_content, GEMINI_API_KEY
+
+project_service = ProjectService()
+asset_service = AssetService()
+storage_service = StorageService(os.path.join(os.path.dirname(__file__), "runtime_storage"))
+creator_ai_pipeline = CreatorAIPipeline(
+    project_service=project_service,
+    asset_service=asset_service,
+    storage_service=storage_service,
 )
-from ffmpeg_service import check_ffmpeg, process_video_trim, get_task_status, UPLOADS_DIR, EXPORTS_DIR
-from ai_engine import analyze_video_potential, match_script_to_transcript, generate_ai_content, GEMINI_API_KEY
 
 app = FastAPI(
     title="CreatorAI Backend Server",
@@ -57,15 +82,26 @@ async def upload_asset(
         unique_id = str(uuid.uuid4())[:8]
         saved_filename = f"{unique_id}_{file.filename}"
         saved_path = os.path.join(UPLOADS_DIR, saved_filename)
-        
+        project_service.create_project(project_id, f"Project {project_id}", f"Uploaded asset {file.filename}")
+
         with open(saved_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-            
+
+        storage_result = storage_service.store_source(project_id, f"asset_{unique_id}", saved_path, file.filename)
+        asset_payload = asset_service.create_asset(
+            f"asset_{unique_id}",
+            project_id,
+            file.filename,
+            media_type=file_type,
+            storage_key=storage_result["path"],
+            checksum_sha256=storage_result.get("checksum"),
+        )
+
         file_size = os.path.getsize(saved_path)
         file_url = f"/uploads/{saved_filename}"
-        
+
         return AssetResponse(
-            id=f"asset_{unique_id}",
+            id=asset_payload["asset_id"],
             project_id=project_id,
             filename=file.filename,
             file_type=file_type,
@@ -73,7 +109,7 @@ async def upload_asset(
             url=file_url,
             upload_date="Just now",
             duration=160.0 if file_type == "video" else None,
-            status="ready"
+            status=asset_payload.get("status", "ready")
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to upload asset: {str(e)}")
@@ -150,4 +186,4 @@ def api_clip_status(task_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("server.main:app", host="0.0.0.0", port=8000, reload=True)
