@@ -208,6 +208,71 @@ class LocalPersistenceTests(unittest.TestCase):
             )
         )
 
+    def test_project_delete_api_cascades_data_and_removes_local_media(self):
+        from server import main
+
+        project = database.create_project({"name": "Project to delete"})
+        retained_project = database.create_project({"name": "Project to keep"})
+        asset = database.create_asset({
+            "projectId": project["id"],
+            "filename": "source.mp4",
+            "fileType": "video",
+            "url": "/uploads/source.mp4",
+        })
+        clip = database.create_clip({
+            "projectId": project["id"],
+            "assetId": asset["id"],
+            "title": "Project clip",
+            "startTime": 0,
+            "endTime": 10,
+        })
+        draft = database.save_clip_draft(clip["id"], {"title": "Project draft"})
+        database.save_project_state(project["id"], "transcript", ["saved transcript"])
+        database.create_output({
+            "project_id": project["id"],
+            "asset_id": asset["id"],
+            "clip_id": clip["id"],
+            "draft_id": draft["id"],
+            "filename": "render.mp4",
+            "url": "/exports/render.mp4",
+            "file_size": 12,
+        })
+
+        assets_dir = os.path.join(self.data_dir.name, "assets")
+        outputs_dir = os.path.join(self.data_dir.name, "outputs")
+        os.makedirs(assets_dir)
+        os.makedirs(outputs_dir)
+        asset_path = os.path.join(assets_dir, "source.mp4")
+        output_path = os.path.join(outputs_dir, "render.mp4")
+        for media_path in (asset_path, output_path):
+            with open(media_path, "wb") as media:
+                media.write(b"local media")
+
+        with patch.object(main, "ASSETS_DIR", assets_dir), patch.object(
+            main, "OUTPUTS_DIR", outputs_dir
+        ):
+            response = main.delete_existing_project(project["id"])
+
+        self.assertTrue(response["deleted"])
+        self.assertEqual(response["asset_count"], 1)
+        self.assertEqual(response["clip_count"], 1)
+        self.assertFalse(os.path.exists(asset_path))
+        self.assertFalse(os.path.exists(output_path))
+        database.init_db()
+        self.assertNotIn(
+            project["id"],
+            {item["id"] for item in database.list_projects()},
+        )
+        self.assertIn(
+            retained_project["id"],
+            {item["id"] for item in database.list_projects()},
+        )
+        self.assertEqual(database.list_assets(project["id"]), [])
+        self.assertEqual(database.list_clips(project["id"]), [])
+        self.assertEqual(database.list_clip_drafts(clip["id"]), [])
+        self.assertEqual(database.list_outputs(project["id"]), [])
+        self.assertEqual(database.get_project_state(project["id"]), {})
+
 
 if __name__ == "__main__":
     unittest.main()

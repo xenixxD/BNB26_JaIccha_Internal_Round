@@ -21,6 +21,11 @@ export const api = {
     return res.data;
   },
 
+  async deleteProject(projectId) {
+    const res = await axios.delete(`${API_BASE}/projects/${encodeURIComponent(projectId)}`);
+    return res.data;
+  },
+
   async createAsset(asset) {
     const res = await axios.post(`${API_BASE}/assets`, asset);
     return res.data;

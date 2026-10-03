@@ -14,14 +14,14 @@ load_dotenv(env_path)
 
 try:
     from database import (
-        list_projects, create_project, list_assets, create_asset, list_clips, create_clip,
+        list_projects, create_project, delete_project, list_assets, create_asset, list_clips, create_clip,
         init_db, update_asset, delete_asset, save_clip_draft, list_clip_drafts, update_clip, save_project_state,
         get_project_state, create_output, list_outputs
     )
     from local_storage import ASSETS_DIR, OUTPUTS_DIR
 except ModuleNotFoundError:
     from server.database import (
-        list_projects, create_project, list_assets, create_asset, list_clips, create_clip,
+        list_projects, create_project, delete_project, list_assets, create_asset, list_clips, create_clip,
         init_db, update_asset, delete_asset, save_clip_draft, list_clip_drafts, update_clip, save_project_state,
         get_project_state, create_output, list_outputs
     )
@@ -128,6 +128,48 @@ def create_new_project(request: dict):
     payload = dict(request)
     project = create_project(payload)
     return project
+
+
+@app.delete("/api/projects/{project_id}", response_model=dict)
+def delete_existing_project(project_id: str):
+    try:
+        deleted = delete_project(project_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    file_urls = [
+        *(
+            _local_media_path(url, "uploads", ASSETS_DIR)
+            for url in deleted["asset_urls"]
+        ),
+        *(
+            _local_media_path(url, "exports", OUTPUTS_DIR)
+            for url in deleted["output_urls"]
+        ),
+    ]
+    warnings = []
+    for file_path in file_urls:
+        if file_path and os.path.isfile(file_path):
+            try:
+                os.remove(file_path)
+            except OSError as exc:
+                logger.warning(
+                    "Could not remove deleted project media file %s: %s",
+                    file_path,
+                    exc,
+                )
+                warnings.append(
+                    f"A related local media file could not be removed: {os.path.basename(file_path)}"
+                )
+
+    return {
+        "deleted": True,
+        "project_id": project_id,
+        "asset_count": len(deleted["asset_urls"]),
+        "clip_count": len(deleted["clip_ids"]),
+        "warnings": warnings,
+    }
+
 
 @app.get("/api/assets", response_model=list)
 def get_assets(project_id: Optional[str] = None):

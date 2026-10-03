@@ -28,7 +28,8 @@ import {
   Check,
   RefreshCw,
   Upload,
-  Zap
+  Zap,
+  Trash2
 } from 'lucide-react';
 
 export const ClipStudioPage = () => {
@@ -42,6 +43,8 @@ export const ClipStudioPage = () => {
     retentionAnalysis,
     abHookVariations,
     activeProjectId,
+    projects,
+    deleteProject,
     runPotentialAnalyzer,
     runRetentionAnalyzer,
     runAbHookGenerator,
@@ -74,6 +77,8 @@ export const ClipStudioPage = () => {
   const [copiedHookId, setCopiedHookId] = useState(null);
   const [selectedHookIndex, setSelectedHookIndex] = useState(0);
   const [scriptInput, setScriptInput] = useState('');
+  const [deletingProject, setDeletingProject] = useState(false);
+  const [projectActionError, setProjectActionError] = useState('');
 
   const videoAssets = assets.filter((a) =>
     (a.fileType === 'video' || a.file_type === 'video') &&
@@ -168,6 +173,27 @@ export const ClipStudioPage = () => {
     }
   };
 
+  const handleDeleteCurrentProject = async () => {
+    const project = projects.find((item) => item.id === activeProjectId);
+    if (!project || deletingProject) return;
+
+    const confirmed = window.confirm(
+      `Delete project "${project.name}" and all of its assets, clips, saved drafts, analysis results, and generated exports? This cannot be undone.`
+    );
+    if (!confirmed) return;
+
+    setDeletingProject(true);
+    setProjectActionError('');
+    try {
+      await deleteProject(project.id);
+      if (projects.length <= 1) navigate('/projects');
+    } catch (error) {
+      setProjectActionError(error.message || 'Could not delete the current project.');
+    } finally {
+      setDeletingProject(false);
+    }
+  };
+
   const filteredMoments = moments.filter((m) => {
     if (filterTag === 'All') return true;
     if (filterTag === 'High Potential') return m.potential_score >= 85;
@@ -218,6 +244,16 @@ export const ClipStudioPage = () => {
             <Button variant="primary" onClick={() => navigate('/video-editor')} icon={Scissors}>
               Open Video Editor
             </Button>
+
+            <Button
+              variant="danger"
+              onClick={handleDeleteCurrentProject}
+              isLoading={deletingProject}
+              disabled={!activeProjectId}
+              icon={Trash2}
+            >
+              Delete Current Project
+            </Button>
           </div>
         }
       >
@@ -239,6 +275,11 @@ export const ClipStudioPage = () => {
             <span>{analysisError}</span>
           </div>
           <Button variant="ghost" size="sm" onClick={() => setAnalysisError(null)}>Dismiss</Button>
+        </div>
+      )}
+      {projectActionError && (
+        <div role="alert" className="p-3 bg-status-danger-soft border border-rose-200 text-status-danger text-xs font-semibold rounded-btn">
+          {projectActionError}
         </div>
       )}
 

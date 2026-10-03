@@ -396,6 +396,63 @@ def delete_asset(asset_id: str) -> Dict[str, Any]:
         conn.close()
 
 
+def delete_project(project_id: str) -> Dict[str, Any]:
+    conn = get_connection()
+    try:
+        project = conn.execute(
+            "SELECT id FROM projects WHERE id = ?",
+            (project_id,),
+        ).fetchone()
+        if not project:
+            raise ValueError(f"Project not found: {project_id}")
+
+        asset_rows = conn.execute(
+            "SELECT id, url FROM assets WHERE project_id = ?",
+            (project_id,),
+        ).fetchall()
+        clip_rows = conn.execute(
+            "SELECT id FROM clips WHERE project_id = ?",
+            (project_id,),
+        ).fetchall()
+        output_rows = conn.execute(
+            "SELECT url FROM outputs WHERE project_id = ?",
+            (project_id,),
+        ).fetchall()
+        clip_ids = [row["id"] for row in clip_rows]
+        asset_files = [row["url"] for row in asset_rows]
+        output_files = [row["url"] for row in output_rows]
+
+        conn.execute("DELETE FROM outputs WHERE project_id = ?", (project_id,))
+        if clip_ids:
+            placeholders = ",".join("?" for _ in clip_ids)
+            draft_rows = conn.execute(
+                f"""
+                SELECT id FROM clip_drafts
+                WHERE clip_id IN ({placeholders})
+                ORDER BY version DESC
+                """,
+                clip_ids,
+            ).fetchall()
+            for draft in draft_rows:
+                conn.execute("DELETE FROM clip_drafts WHERE id = ?", (draft["id"],))
+        conn.execute("DELETE FROM clips WHERE project_id = ?", (project_id,))
+        conn.execute("DELETE FROM assets WHERE project_id = ?", (project_id,))
+        conn.execute("DELETE FROM project_state WHERE project_id = ?", (project_id,))
+        conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        conn.commit()
+        return {
+            "project_id": project_id,
+            "asset_urls": asset_files,
+            "output_urls": output_files,
+            "clip_ids": clip_ids,
+        }
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def list_clips(project_id: Optional[str] = None) -> List[Dict[str, Any]]:
     conn = get_connection()
     try:

@@ -140,6 +140,65 @@ export const useStore = create((set, get) => ({
         }
       },
 
+      deleteProject: async (projectId) => {
+        try {
+          const deleted = await api.deleteProject(projectId);
+          const deletingActiveProject = get().activeProjectId === projectId;
+          const remainingProjects = get().projects.filter(
+            (project) => project.id !== projectId
+          );
+          const nextProjectId = deletingActiveProject
+            ? remainingProjects[0]?.id || null
+            : get().activeProjectId;
+          const remainingAssets = get().assets.filter(
+            (asset) => asset.projectId !== projectId && asset.project_id !== projectId
+          );
+          const remainingClips = get().clips.filter(
+            (clip) => clip.projectId !== projectId
+          );
+          const nextActiveClipId = remainingClips.some(
+            (clip) => clip.id === get().activeClipId
+          )
+            ? get().activeClipId
+            : remainingClips.find((clip) => clip.projectId === nextProjectId)?.id || null;
+
+          set({
+            projects: remainingProjects,
+            assets: remainingAssets,
+            clips: remainingClips,
+            activeProjectId: nextProjectId,
+            activeClipId: nextActiveClipId,
+            draftVersions: get().draftVersions.filter(
+              (draft) => draft.project_id !== projectId
+            ),
+            outputs: get().outputs.filter(
+              (output) => output.project_id !== projectId
+            ),
+            workspaceError: deleted.warnings.length
+              ? deleted.warnings.join(' ')
+              : null
+          });
+
+          if (!deletingActiveProject) return deleted;
+          if (nextProjectId) {
+            await get().loadProjectState(nextProjectId);
+          } else {
+            set({
+              transcript: [],
+              candidateMoments: [],
+              scriptMatches: [],
+              retentionAnalysis: null,
+              abHookVariations: [],
+              outputs: []
+            });
+          }
+          return deleted;
+        } catch (error) {
+          set({ workspaceError: `Could not delete project: ${error.message}` });
+          throw error;
+        }
+      },
+
       addAsset: async (assetData, alreadyPersisted = false) => {
         const fileType = assetData.fileType || assetData.file_type || 'video';
         const projectId = assetData.projectId || assetData.project_id || get().activeProjectId;

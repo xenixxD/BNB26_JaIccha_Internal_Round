@@ -228,6 +228,7 @@ The FastAPI service currently exposes the following routes:
 | `GET` | `/api/health` | Backend, FFmpeg, and Gemini configuration status |
 | `GET` | `/api/projects` | List persisted projects |
 | `POST` | `/api/projects` | Create a project from a JSON object |
+| `DELETE` | `/api/projects/{project_id}` | Delete a project and its assets, clips, drafts, analysis state, outputs, and local media |
 | `GET` | `/api/assets?project_id=...` | List assets, optionally filtered by project |
 | `POST` | `/api/assets` | Create asset metadata from a JSON object |
 | `POST` | `/api/assets/upload` | Upload a file as multipart form data |
@@ -271,6 +272,8 @@ SQLite is initialized automatically. The seed routine inserts demonstration cont
 On frontend startup, projects, assets, and clips are fetched from the backend. Creating projects/scripts/clips, uploading files, saving analysis state, updating duration/status, saving drafts, and exporting use backend persistence APIs. Editor keystrokes remain in memory until **Save Draft** is clicked; each click makes the next saved version. Draft history in the editor can restore an earlier version for continued editing.
 
 The server exposes files only through the dedicated `/uploads` and `/exports` routes. It does not mount the entire local data directory or send absolute host filesystem paths to the browser. The default storage root is `server/data`; set `CREATORAI_LOCAL_DATA_DIR` to use a different root. On default startup, supported legacy data in `server/creatorai.db`, `server/uploads`, and `server/exports` is copied into the new default layout without deleting the originals. Custom storage roots skip this legacy copy.
+
+The Clip Studio header includes **Delete Current Project**. After explicit confirmation, the backend removes the selected project and its dependent assets, clips, draft history, saved analysis state, output metadata, and locally stored source/export files. Remote demo URLs are not treated as local files. If other projects remain, the app switches to one; deleting the last project returns to the Projects page. This operation cannot be undone.
 
 To completely reset this temporary demo storage:
 
