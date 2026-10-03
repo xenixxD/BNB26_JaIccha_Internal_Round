@@ -42,6 +42,47 @@ class PotentialAnalysisResponse(BaseModel):
     candidates: List[MomentCandidate]
     methodology: str = "NLP Heuristic & Structure Analysis"
 
+# Retention Analyzer Schemas
+class WeakSection(BaseModel):
+    id: str
+    start_time: float
+    end_time: float
+    risk_level: Literal["High Drop-off Risk", "Moderate Risk", "Minor Pacing Issue"]
+    issue_type: str # "Unnecessary Pause", "Weak Opening Hook", "Repetitive Speech", "Abrupt Transition"
+    description: str
+    suggestion: str
+
+class RetentionAnalysisRequest(BaseModel):
+    asset_id: str
+    clip_id: Optional[str] = None
+
+class RetentionAnalysisResponse(BaseModel):
+    asset_id: str
+    overall_retention_score: float # Heuristic engagement estimate 0-100
+    opening_effectiveness: str # "Strong Hook (Top 5%)", "Needs Punchier Opener", etc.
+    pacing_wpm: float
+    weak_sections: List[WeakSection]
+    actionable_recommendations: List[str]
+    methodology_note: str = "Heuristic prediction based on transcript pacing, pause density, and topic boundaries (Not real platform analytics)."
+
+# A/B Hook Generator Schemas
+class HookVariation(BaseModel):
+    id: str
+    style: Literal["Curiosity-Driven", "Bold & Controversial", "Educational", "Storytelling", "Question-Based"]
+    hook_text: str
+    suggested_caption: str
+    predicted_impact: str # "Higher CTR", "Better Retention", "More Comments"
+
+class ABHookRequest(BaseModel):
+    clip_id: str
+    segment_text: str
+    preferred_styles: Optional[List[str]] = None
+
+class ABHookResponse(BaseModel):
+    clip_id: str
+    original_hook: str
+    variations: List[HookVariation]
+
 class ScriptMatchRequest(BaseModel):
     asset_id: str
     script_text: str
@@ -63,7 +104,7 @@ class ScriptMatchResponse(BaseModel):
 class ContentGenRequest(BaseModel):
     clip_id: str
     transcript_segment: str
-    platform: str = "instagram_reels" # "instagram_reels" | "youtube_shorts" | "tiktok" | "linkedin"
+    platform: str = "instagram_reels"
 
 class ContentGenResponse(BaseModel):
     hooks: List[str]
@@ -77,14 +118,14 @@ class ClipTrimRequest(BaseModel):
     video_url: Optional[str] = None
     start_time: float
     end_time: float
-    aspect_ratio: str = "9:16" # "9:16" | "16:9" | "1:1"
+    aspect_ratio: str = "9:16"
     burn_subtitles: bool = False
     subtitle_lines: Optional[List[Dict[str, Any]]] = None
 
 class TrimTaskResponse(BaseModel):
     task_id: str
     clip_id: str
-    status: str # "queued" | "processing" | "completed" | "failed"
+    status: str
     progress: float
     output_filename: Optional[str] = None
     output_url: Optional[str] = None
@@ -92,4 +133,3 @@ class TrimTaskResponse(BaseModel):
     duration_seconds: Optional[float] = None
     error_message: Optional[str] = None
     ffmpeg_used: bool
-

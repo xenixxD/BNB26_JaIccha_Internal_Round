@@ -14,7 +14,15 @@ os.makedirs(UPLOADS_DIR, exist_ok=True)
 TASKS: Dict[str, Dict[str, Any]] = {}
 
 def check_ffmpeg() -> tuple[bool, Optional[str]]:
-    """Checks if FFmpeg binary is available on system path or standard locations."""
+    """Checks if FFmpeg binary is available on system path, via imageio_ffmpeg, or standard locations."""
+    try:
+        import imageio_ffmpeg
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        if exe and os.path.exists(exe):
+            return True, exe
+    except Exception:
+        pass
+
     path = shutil.which("ffmpeg")
     if path:
         return True, path

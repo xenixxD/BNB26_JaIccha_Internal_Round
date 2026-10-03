@@ -5,49 +5,49 @@ from typing import Optional, List
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from dotenv import load_dotenv, find_dotenv
 
-from server.database.asset_service import AssetService
-from server.database.project_service import ProjectService
-from server.storage.storage_service import StorageService
-from server.creatorai.pipeline import CreatorAIPipeline
+# Ensure .env configuration is loaded
+env_path = find_dotenv(usecwd=True)
+load_dotenv(env_path)
 
 try:
-    from .schemas import (
-        SystemHealthResponse, AssetResponse,
-        PotentialAnalysisRequest, PotentialAnalysisResponse,
-        ScriptMatchRequest, ScriptMatchResponse,
-        ContentGenRequest, ContentGenResponse,
-        ClipTrimRequest, TrimTaskResponse
-    )
-    from .ffmpeg_service import check_ffmpeg, process_video_trim, get_task_status, UPLOADS_DIR, EXPORTS_DIR
-    from .ai_engine import analyze_video_potential, match_script_to_transcript, generate_ai_content, GEMINI_API_KEY
-except ImportError:  # pragma: no cover
     from schemas import (
         SystemHealthResponse, AssetResponse,
         PotentialAnalysisRequest, PotentialAnalysisResponse,
+        RetentionAnalysisRequest, RetentionAnalysisResponse,
+        ABHookRequest, ABHookResponse,
         ScriptMatchRequest, ScriptMatchResponse,
         ContentGenRequest, ContentGenResponse,
         ClipTrimRequest, TrimTaskResponse
     )
     from ffmpeg_service import check_ffmpeg, process_video_trim, get_task_status, UPLOADS_DIR, EXPORTS_DIR
-    from ai_engine import analyze_video_potential, match_script_to_transcript, generate_ai_content, GEMINI_API_KEY
-
-project_service = ProjectService()
-asset_service = AssetService()
-storage_service = StorageService(os.path.join(os.path.dirname(__file__), "runtime_storage"))
-creator_ai_pipeline = CreatorAIPipeline(
-    project_service=project_service,
-    asset_service=asset_service,
-    storage_service=storage_service,
-)
+    from ai_engine import (
+        analyze_video_potential, analyze_retention_risk, generate_ab_hooks,
+        match_script_to_transcript, generate_ai_content, GEMINI_API_KEY
+    )
+except ModuleNotFoundError:
+    from server.schemas import (
+        SystemHealthResponse, AssetResponse,
+        PotentialAnalysisRequest, PotentialAnalysisResponse,
+        RetentionAnalysisRequest, RetentionAnalysisResponse,
+        ABHookRequest, ABHookResponse,
+        ScriptMatchRequest, ScriptMatchResponse,
+        ContentGenRequest, ContentGenResponse,
+        ClipTrimRequest, TrimTaskResponse
+    )
+    from server.ffmpeg_service import check_ffmpeg, process_video_trim, get_task_status, UPLOADS_DIR, EXPORTS_DIR
+    from server.ai_engine import (
+        analyze_video_potential, analyze_retention_risk, generate_ab_hooks,
+        match_script_to_transcript, generate_ai_content, GEMINI_API_KEY
+    )
 
 app = FastAPI(
     title="CreatorAI Backend Server",
-    description="FastAPI backend providing video clipping, transcription, and AI content analysis services.",
-    version="1.0.0"
+    description="FastAPI backend providing video clipping, transcription, retention analysis, and A/B hook lab services.",
+    version="1.1.0"
 )
 
-# CORS configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -56,7 +56,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount static file directories for uploads and exports
 app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 app.mount("/exports", StaticFiles(directory=EXPORTS_DIR), name="exports")
 
@@ -67,8 +66,8 @@ def get_health():
         status="ok",
         ffmpeg_available=ffmpeg_ok,
         ffmpeg_path=ffmpeg_path,
-        gemini_configured=bool(GEMINI_API_KEY),
-        version="1.0.0"
+        gemini_configured=bool(GEMINI_API_KEY or os.getenv("GEMINI_API_KEY")),
+        version="1.1.0"
     )
 
 @app.post("/api/assets/upload", response_model=AssetResponse)
@@ -82,26 +81,15 @@ async def upload_asset(
         unique_id = str(uuid.uuid4())[:8]
         saved_filename = f"{unique_id}_{file.filename}"
         saved_path = os.path.join(UPLOADS_DIR, saved_filename)
-        project_service.create_project(project_id, f"Project {project_id}", f"Uploaded asset {file.filename}")
-
+        
         with open(saved_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-
-        storage_result = storage_service.store_source(project_id, f"asset_{unique_id}", saved_path, file.filename)
-        asset_payload = asset_service.create_asset(
-            f"asset_{unique_id}",
-            project_id,
-            file.filename,
-            media_type=file_type,
-            storage_key=storage_result["path"],
-            checksum_sha256=storage_result.get("checksum"),
-        )
-
+            
         file_size = os.path.getsize(saved_path)
         file_url = f"/uploads/{saved_filename}"
-
+        
         return AssetResponse(
-            id=asset_payload["asset_id"],
+            id=f"asset_{unique_id}",
             project_id=project_id,
             filename=file.filename,
             file_type=file_type,
@@ -109,19 +97,29 @@ async def upload_asset(
             url=file_url,
             upload_date="Just now",
             duration=160.0 if file_type == "video" else None,
-            status=asset_payload.get("status", "ready")
+            status="ready"
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to upload asset: {str(e)}")
 
 @app.post("/api/ai/analyze-potential", response_model=PotentialAnalysisResponse)
 def api_analyze_potential(request: PotentialAnalysisRequest):
-    candidates = analyze_video_potential()
+    candidates = analyze_video_potential(asset_filename=request.asset_id)
     return PotentialAnalysisResponse(
         asset_id=request.asset_id,
         candidates=candidates,
-        methodology="Transcript Hook & WPM Pacing NLP Heuristics"
+        methodology="Gemini 3.8 Flash Video & Transcript Intelligence"
     )
+
+@app.post("/api/ai/analyze-retention", response_model=RetentionAnalysisResponse)
+def api_analyze_retention(request: RetentionAnalysisRequest):
+    res = analyze_retention_risk(asset_id=request.asset_id)
+    return RetentionAnalysisResponse(**res)
+
+@app.post("/api/ai/ab-hooks", response_model=ABHookResponse)
+def api_ab_hooks(request: ABHookRequest):
+    res = generate_ab_hooks(segment_text=request.segment_text)
+    return ABHookResponse(**res)
 
 @app.post("/api/ai/script-match", response_model=ScriptMatchResponse)
 def api_script_match(request: ScriptMatchRequest):
@@ -141,15 +139,13 @@ def api_generate_content(request: ContentGenRequest):
 
 @app.post("/api/clips/trim", response_model=TrimTaskResponse)
 def api_trim_clip(request: ClipTrimRequest):
-    # Resolve input video file path
     input_file_path = None
     if request.video_url and request.video_url.startswith("/uploads/"):
         filename = os.path.basename(request.video_url)
         input_file_path = os.path.join(UPLOADS_DIR, filename)
         
     if not input_file_path or not os.path.exists(input_file_path):
-        # Fallback to search any existing mp4 in UPLOADS_DIR
-        files = [f for f in os.listdir(UPLOADS_DIR) if f.endswith(".mp4")]
+        files = [f for f in os.listdir(UPLOADS_DIR) if f.lower().endswith((".mp4", ".mov", ".webm", ".mkv"))]
         if files:
             input_file_path = os.path.join(UPLOADS_DIR, files[0])
             
@@ -186,4 +182,4 @@ def api_clip_status(task_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("server.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

@@ -351,14 +351,35 @@ export const VideoEditorPage = () => {
 
           {/* Export Output Banner */}
           {exportResult && (
-            <div className={`p-3 rounded-panel border text-xs space-y-1 ${
+            <div className={`p-3 rounded-panel border text-xs space-y-2 ${
               exportResult.status === 'completed' ? 'bg-status-success-soft border-emerald-200 text-status-success' : 'bg-status-warning-soft border-amber-200 text-status-warning'
             }`}>
-              <div className="font-bold flex items-center gap-1">
-                {exportResult.status === 'completed' ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
-                <span>{exportResult.status === 'completed' ? 'Export Ready!' : 'Export Notice'}</span>
+              <div className="font-bold flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  {exportResult.status === 'completed' ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <AlertTriangle className="w-4 h-4 text-amber-600" />}
+                  <span>{exportResult.status === 'completed' ? 'FFmpeg Clip Exported!' : 'Export Notice'}</span>
+                </div>
+                {exportResult.file_size_bytes > 0 && (
+                  <span className="font-mono text-[10px] text-ink-muted">
+                    {(exportResult.file_size_bytes / 1024 / 1024).toFixed(1)} MB
+                  </span>
+                )}
               </div>
               <p className="text-[11px] text-ink-secondary">{exportResult.error_message || exportResult.output_filename}</p>
+              
+              {exportResult.output_url && (
+                <div className="pt-1">
+                  <a
+                    href={exportResult.output_url}
+                    download={exportResult.output_filename || "trimmed_clip.mp4"}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="w-full h-8 bg-accent text-white text-xs font-bold rounded-btn flex items-center justify-center gap-1.5 hover:bg-accent-hover transition-colors shadow-sm"
+                  >
+                    <Download className="w-3.5 h-3.5" /> Download Trimmed Clip (.MP4)
+                  </a>
+                </div>
+              )}
             </div>
           )}
         </div>

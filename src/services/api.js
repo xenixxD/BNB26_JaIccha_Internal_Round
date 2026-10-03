@@ -13,7 +13,7 @@ export const api = {
         ffmpeg_available: false,
         ffmpeg_path: null,
         gemini_configured: false,
-        version: "1.0.0 (Offline Demo Mode)"
+        version: "1.1.0 (Offline Demo Mode)"
       };
     }
   },
@@ -53,7 +53,27 @@ export const api = {
       return res.data;
     } catch (err) {
       console.warn('Using client AI potential fallback:', err);
-      return null; // Triggers fallback in Zustand store
+      return null;
+    }
+  },
+
+  async analyzeRetention(assetId) {
+    try {
+      const res = await axios.post(`${API_BASE}/ai/analyze-retention`, { asset_id: assetId }, { timeout: 5000 });
+      return res.data;
+    } catch (err) {
+      console.warn('Using client retention analysis fallback:', err);
+      return null;
+    }
+  },
+
+  async generateAbHooks(clipId, segmentText) {
+    try {
+      const res = await axios.post(`${API_BASE}/ai/ab-hooks`, { clip_id: clipId, segment_text: segmentText }, { timeout: 5000 });
+      return res.data;
+    } catch (err) {
+      console.warn('Using client A/B hook lab fallback:', err);
+      return null;
     }
   },
 
