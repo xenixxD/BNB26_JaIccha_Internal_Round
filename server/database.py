@@ -168,208 +168,6 @@ def init_db() -> None:
         conn.close()
 
 
-def seed_default_data() -> None:
-    conn = get_connection()
-    try:
-        project_count = conn.execute("SELECT COUNT(*) AS c FROM projects").fetchone()["c"]
-        if project_count > 0:
-            return
-
-        sample_projects = [
-            {
-                "id": "proj_1",
-                "name": "Kolkata Tech Talk",
-                "description": "Keynote presentation on AI-driven creator tools and automated video workflows.",
-                "category": "Technology & AI",
-                "target_platforms": ["Instagram Reels", "YouTube Shorts", "TikTok"],
-                "created_at": "2026-10-01",
-                "status": "Active",
-                "thumbnail": "https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=600&auto=format&fit=crop&q=80",
-                "assets_count": 3,
-                "clips_count": 2,
-            },
-            {
-                "id": "proj_2",
-                "name": "SaaS Launch Roadmap",
-                "description": "Breakdown of product strategy, pricing models, and acquisition channels.",
-                "category": "Product & Startup",
-                "target_platforms": ["LinkedIn", "YouTube Shorts"],
-                "created_at": "2026-09-28",
-                "status": "Active",
-                "thumbnail": "https://images.unsplash.com/photo-1551836022-d5d88e9218df?w=600&auto=format&fit=crop&q=80",
-                "assets_count": 2,
-                "clips_count": 2,
-            },
-        ]
-
-        for project in sample_projects:
-            conn.execute(
-                """
-                INSERT INTO projects (
-                    id, name, description, category, target_platforms, created_at, status, thumbnail,
-                    assets_count, clips_count, metadata
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    project["id"],
-                    project["name"],
-                    project["description"],
-                    project["category"],
-                    json.dumps(project["target_platforms"]),
-                    project["created_at"],
-                    project["status"],
-                    project["thumbnail"],
-                    project["assets_count"],
-                    project["clips_count"],
-                    json.dumps({}),
-                ),
-            )
-
-        conn.execute(
-            """
-            INSERT INTO assets (
-                id, project_id, filename, file_type, file_size, url, upload_date, duration, status, content, is_demo, metadata
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "asset_v1",
-                "proj_1",
-                "Kolkata_Tech_Talk_Full_Keynote.mp4",
-                "video",
-                48500000,
-                "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
-                "2026-10-01",
-                160.0,
-                "ready",
-                None,
-                0,
-                json.dumps({}),
-            ),
-        )
-
-        conn.execute(
-            """
-            INSERT INTO assets (
-                id, project_id, filename, file_type, file_size, url, upload_date, duration, status, content, is_demo, metadata
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "asset_s1",
-                "proj_1",
-                "Keynote_Presentation_Script.txt",
-                "script",
-                4200,
-                "#",
-                "2026-10-01",
-                None,
-                "ready",
-                "Welcome everyone to Kolkata Tech Talk 2026! Today we are discussing how AI is reshaping content creation.\n\nMost creators make one huge mistake when starting with AI tools: they treat AI as a replacement rather than an operating copilot.",
-                0,
-                json.dumps({}),
-            ),
-        )
-
-        conn.execute(
-            """
-            INSERT INTO assets (
-                id, project_id, filename, file_type, file_size, url, upload_date, duration, status, content, is_demo, metadata
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "asset_a1",
-                "proj_1",
-                "Background_Lofi_Beat.mp3",
-                "audio",
-                3200000,
-                "#",
-                "2026-10-02",
-                None,
-                "ready",
-                None,
-                0,
-                json.dumps({}),
-            ),
-        )
-
-        conn.execute(
-            """
-            INSERT INTO clips (
-                id, project_id, asset_id, title, start_time, end_time, duration, aspect_ratio, potential_score,
-                rating_label, suggested_hook, hooks, selected_hook_index, caption, hashtags, subtitles, status,
-                scheduled_date, platform, exported_url, metadata
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "clip_1",
-                "proj_1",
-                "asset_v1",
-                "The #1 AI Creator Mistake",
-                12.5,
-                35.0,
-                22.5,
-                "9:16",
-                94.5,
-                "High Potential",
-                "Most creators make one huge mistake when starting with AI...",
-                json.dumps([
-                    "🔥 Stop making this #1 mistake when using AI tools for Instagram Reels!",
-                    "💡 Here's how top 1% creators automate video workflows in 2026...",
-                    "🚀 The secret step-by-step strategy to boost video engagement tenfold."
-                ]),
-                0,
-                "Ready to level up your content game on Instagram Reels? 🚀\n\nIn this clip: Most creators treat AI as a replacement instead of a copilot...\n\nComment 'CREATOR' for full access!",
-                json.dumps(["#CreatorEconomy", "#AIWorkflow", "#ReelsViral", "#TechTools"]),
-                json.dumps([{"id": 1, "start": 0.0, "end": 3.5, "text": "Most creators make one huge mistake"}]),
-                "Ready for Review",
-                "2026-10-05T14:00:00",
-                "Instagram Reels",
-                None,
-                json.dumps({}),
-            ),
-        )
-
-        conn.execute(
-            """
-            INSERT INTO clips (
-                id, project_id, asset_id, title, start_time, end_time, duration, aspect_ratio, potential_score,
-                rating_label, suggested_hook, hooks, selected_hook_index, caption, hashtags, subtitles, status,
-                scheduled_date, platform, exported_url, metadata
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                "clip_2",
-                "proj_1",
-                "asset_v1",
-                "3-Second Hook Retention Secret",
-                95.0,
-                128.0,
-                33.0,
-                "9:16",
-                89.2,
-                "High Potential",
-                "If you master hook generation in the first 3 seconds...",
-                json.dumps([
-                    "⚡ How to skyrocket your TikTok watch time instantly!",
-                    "📈 The 3-second rule that changed my video analytics forever.",
-                    "🎥 Retention secret that big creators don't want you to know."
-                ]),
-                0,
-                "Retention is everything in 2026! 📈 Master the 3-second hook to keep viewers locked in.",
-                json.dumps(["#TikTokTips", "#ContentGrowth", "#VideoHooks", "#Shorts"]),
-                json.dumps([{"id": 1, "start": 0.0, "end": 4.0, "text": "If you master hook generation"}]),
-                "Scheduled",
-                "2026-10-06T18:30:00",
-                "TikTok",
-                None,
-                json.dumps({}),
-            ),
-        )
-
-        conn.commit()
-    finally:
-        conn.close()
-
-
 def list_projects() -> List[Dict[str, Any]]:
     conn = get_connection()
     try:
@@ -451,9 +249,13 @@ def list_assets(project_id: Optional[str] = None) -> List[Dict[str, Any]]:
 
 
 def create_asset(payload: Dict[str, Any]) -> Dict[str, Any]:
+    project_id = payload.get("projectId") or payload.get("project_id")
+    if not project_id:
+        raise ValueError("Project ID is required")
+
     asset = {
         "id": payload.get("id") or f"asset_{uuid.uuid4().hex[:12]}",
-        "project_id": payload.get("projectId") or payload.get("project_id") or "proj_1",
+        "project_id": project_id,
         "filename": payload.get("filename") or "uploaded_file",
         "file_type": payload.get("fileType") or payload.get("file_type") or "video",
         "file_size": int(payload.get("fileSize") or payload.get("file_size") or 0),
@@ -614,10 +416,13 @@ def create_clip(payload: Dict[str, Any]) -> Dict[str, Any]:
     end_time = float(payload.get("endTime") or payload.get("end_time") or 30.0)
     explicit_duration = payload.get("duration")
     computed_duration = max(end_time - start_time, 0.0)
+    project_id = payload.get("projectId") or payload.get("project_id")
+    if not project_id:
+        raise ValueError("Project ID is required")
 
     clip = {
         "id": payload.get("id") or f"clip_{uuid.uuid4().hex[:12]}",
-        "project_id": payload.get("projectId") or payload.get("project_id") or "proj_1",
+        "project_id": project_id,
         "asset_id": payload.get("assetId") or payload.get("asset_id"),
         "title": payload.get("title") or "Generated Clip",
         "start_time": start_time,
@@ -1011,4 +816,3 @@ def clip_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
 
 
 init_db()
-seed_default_data()

@@ -8,11 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv, find_dotenv
 
-<<<<<<< HEAD
 # Load local configuration before importing modules that resolve the data directory.
-=======
-# Ensure .env configuration is loaded from workspace root
->>>>>>> 3dd8d15f (feat: complete Gemini + Groq AI dual-provider architecture, Whisper audio transcription, and AI content planner generator)
 env_path = find_dotenv(usecwd=True)
 load_dotenv(env_path)
 
@@ -239,7 +235,7 @@ def get_project_outputs(project_id: str):
 @app.post("/api/assets/upload", response_model=AssetResponse)
 async def upload_asset(
     file: UploadFile = File(...),
-    project_id: str = Form("proj_1"),
+    project_id: str = Form(...),
     file_type: str = Form("video")
 ):
     if not any(project["id"] == project_id for project in list_projects()):

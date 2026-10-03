@@ -63,7 +63,7 @@ export const NewProjectModal = ({ isOpen, onClose }) => {
             <input
               type="text"
               required
-              placeholder="e.g. Kolkata Tech Talk"
+              placeholder="e.g. Weekly Product Update"
               value={name}
               onChange={(e) => setName(e.target.value)}
               className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-indigo-500"

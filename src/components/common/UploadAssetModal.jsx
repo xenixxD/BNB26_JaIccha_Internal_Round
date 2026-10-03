@@ -17,6 +17,10 @@ export const UploadAssetModal = ({ isOpen, onClose, onSuccess }) => {
 
   const onDrop = async (acceptedFiles, fileRejections) => {
     setErrorMessage(null);
+    if (!activeProjectId) {
+      setErrorMessage('Create a project before uploading assets.');
+      return;
+    }
     if (fileRejections && fileRejections.length > 0) {
       const err = fileRejections[0].errors[0]?.message || 'Invalid file format or size exceeded. MP4, MOV, WEBM (Up to 500 MB) supported.';
       setErrorMessage(err);
@@ -76,6 +80,10 @@ export const UploadAssetModal = ({ isOpen, onClose, onSuccess }) => {
 
   const handleScriptSubmit = async (e) => {
     e.preventDefault();
+    if (!activeProjectId) {
+      setErrorMessage('Create a project before adding a script.');
+      return;
+    }
     if (!scriptText.trim()) return;
 
     try {

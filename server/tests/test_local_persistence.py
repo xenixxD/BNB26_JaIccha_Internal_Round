@@ -21,6 +21,17 @@ class LocalPersistenceTests(unittest.TestCase):
         self.addCleanup(self.database_path_patch.stop)
         database.init_db()
 
+    def test_new_workspace_does_not_seed_demo_data(self):
+        self.assertEqual(database.list_projects(), [])
+        self.assertEqual(database.list_assets(), [])
+        self.assertEqual(database.list_clips(), [])
+
+    def test_assets_and_clips_require_an_existing_project(self):
+        with self.assertRaisesRegex(ValueError, "Project ID is required"):
+            database.create_asset({"filename": "source.mp4"})
+        with self.assertRaisesRegex(ValueError, "Project ID is required"):
+            database.create_clip({"title": "Clip without project"})
+
     def test_workspace_drafts_state_and_outputs_survive_database_reinitialization(self):
         project = database.create_project({"name": "Persistence test"})
         asset = database.create_asset({
@@ -67,7 +78,6 @@ class LocalPersistenceTests(unittest.TestCase):
         })
 
         database.init_db()
-        database.seed_default_data()
 
         self.assertIn(
             project["id"],

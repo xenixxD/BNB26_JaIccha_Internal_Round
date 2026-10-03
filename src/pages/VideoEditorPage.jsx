@@ -298,26 +298,28 @@ export const VideoEditorPage = () => {
                   : 'w-full h-full'
               }`}
             >
-              <video
-                ref={videoRef}
-                src={videoSrc || currentAsset?.url || "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"}
-                onLoadedMetadata={(e) => {
-                  if (e.target.duration && currentAsset && currentAsset.duration !== Math.round(e.target.duration * 10) / 10) {
-                    updateAssetDuration(currentAsset.id, e.target.duration);
-                    if (currentClip && currentClip.endTime > e.target.duration) {
-                      updateClipTimestamps(currentClip.id, 0, Math.round(e.target.duration * 10) / 10);
+              {currentAsset && (
+                <video
+                  ref={videoRef}
+                  src={videoSrc || currentAsset.url}
+                  onLoadedMetadata={(e) => {
+                    if (e.target.duration && currentAsset.duration !== Math.round(e.target.duration * 10) / 10) {
+                      updateAssetDuration(currentAsset.id, e.target.duration);
+                      if (currentClip.endTime > e.target.duration) {
+                        updateClipTimestamps(currentClip.id, 0, Math.round(e.target.duration * 10) / 10);
+                      }
                     }
-                  }
-                }}
-                onTimeUpdate={handleTimeUpdate}
-                className="w-full h-full object-cover"
-              />
+                  }}
+                  onTimeUpdate={handleTimeUpdate}
+                  className="w-full h-full object-cover"
+                />
+              )}
 
               {/* Subtitle Overlay Preview */}
-              {currentClip.subtitles && currentClip.subtitles.length > 0 && (
+              {currentClip.subtitles?.[0]?.text && (
                 <div className="absolute bottom-6 left-2 right-2 text-center pointer-events-none">
                   <span className="bg-black/90 text-yellow-300 text-xs font-black uppercase tracking-wider px-3 py-1.5 rounded-chip border border-yellow-500/40 shadow-xl backdrop-blur-sm inline-block max-w-[90%]">
-                    {currentClip.subtitles[0]?.text || "SAMPLE CAPTION"}
+                    {currentClip.subtitles[0].text}
                   </span>
                 </div>
               )}

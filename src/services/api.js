@@ -91,7 +91,7 @@ export const api = {
     }
   },
 
-  async uploadAsset(file, projectId = 'proj_1', fileType = 'video', onProgress) {
+  async uploadAsset(file, projectId, fileType = 'video', onProgress) {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('project_id', projectId);

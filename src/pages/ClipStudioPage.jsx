@@ -60,7 +60,7 @@ export const ClipStudioPage = () => {
     assets.find((asset) =>
       (asset.fileType === 'video' || asset.file_type === 'video') &&
       (asset.projectId || asset.project_id) === activeProjectId
-    )?.id || 'asset_v1'
+    )?.id || null
   );
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -68,15 +68,12 @@ export const ClipStudioPage = () => {
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [filterTag, setFilterTag] = useState('All');
   const [sortBy, setSortBy] = useState('score');
-  const [selectedCandidateIds, setSelectedCandidateIds] = useState(['cand_1']);
-  const [activeCandidateId, setActiveCandidateId] = useState('cand_1');
+  const [selectedCandidateIds, setSelectedCandidateIds] = useState([]);
+  const [activeCandidateId, setActiveCandidateId] = useState(null);
   const [targetFormat, setTargetFormat] = useState('9:16');
   const [copiedHookId, setCopiedHookId] = useState(null);
   const [selectedHookIndex, setSelectedHookIndex] = useState(0);
-  const [scriptInput, setScriptInput] = useState(
-    "Most creators make one huge mistake when starting with AI tools: they treat AI as a replacement rather than an operating copilot.\n\n" +
-    "If you master hook generation in the first 3 seconds, your retention rate will skyrocket across TikTok and Instagram."
-  );
+  const [scriptInput, setScriptInput] = useState('');
 
   const videoAssets = assets.filter((a) =>
     (a.fileType === 'video' || a.file_type === 'video') &&
@@ -110,52 +107,22 @@ export const ClipStudioPage = () => {
   }, [selectedAssetId, candidateMoments]);
 
   useEffect(() => {
-    if (activeTab === 'retention' && !retentionAnalysis) {
+    if (selectedAssetId && activeTab === 'retention' && !retentionAnalysis) {
       runRetentionAnalyzer(selectedAssetId);
-    } else if (activeTab === 'hooklab' && abHookVariations.length === 0) {
-      runAbHookGenerator(activeClip?.id || 'clip_1', activeClip?.caption || 'Sample segment text');
+    } else if (selectedAssetId && activeTab === 'hooklab' && abHookVariations.length === 0 && activeClip) {
+      runAbHookGenerator(activeClip.id, activeClip.caption || '');
     }
   }, [activeTab, selectedAssetId]);
 
   const assetCandidates = candidateMoments.filter(
     (candidate) => !candidate.assetId || candidate.assetId === activeAsset?.id
   );
-  const moments = assetCandidates.length > 0 ? assetCandidates : [
-    {
-      id: 'cand_1',
-      title: 'The #1 AI Creator Mistake',
-      start_time: 12.5,
-      end_time: 35.0,
-      duration: 22.5,
-      transcript_excerpt: 'Most creators make one huge mistake when starting with AI tools: they treat AI as a replacement rather than an operating copilot.',
-      potential_score: 94.5,
-      rating_label: 'High Potential',
-      suggested_hook: 'Most creators make one huge mistake when starting with AI...',
-      reasons: ['Strong curiosity hook', 'Optimal pacing (145 WPM)', 'Self-contained 22.5s window'],
-      hookScore: 96,
-      pacingScore: 92,
-      shareScore: 95
-    },
-    {
-      id: 'cand_2',
-      title: '3-Second Hook Retention Secret',
-      start_time: 95.0,
-      end_time: 128.0,
-      duration: 33.0,
-      transcript_excerpt: 'If you master hook generation in the first 3 seconds, your retention rate will skyrocket across TikTok and Instagram.',
-      potential_score: 89.2,
-      rating_label: 'High Potential',
-      suggested_hook: 'If you master hook generation in the first 3 seconds...',
-      reasons: ['Direct takeaway', 'High retention topic', 'Optimal 33s duration'],
-      hookScore: 90,
-      pacingScore: 88,
-      shareScore: 89
-    }
-  ];
+  const moments = assetCandidates;
 
   const activeMoment = moments.find((m) => m.id === activeCandidateId) || moments[0];
 
   const handleRunAnalyzer = async () => {
+    if (!selectedAssetId) return;
     setAnalyzing(true);
     setAnalysisError(null);
     try {
@@ -226,24 +193,25 @@ export const ClipStudioPage = () => {
         actions={
           <div className="flex flex-wrap items-center gap-2">
             {/* Prominent Upload Video Action */}
-            <Button variant="secondary" onClick={() => setIsUploadModalOpen(true)} icon={Upload}>
-              Upload New Video
+            <Button variant="secondary" onClick={() => activeProjectId ? setIsUploadModalOpen(true) : navigate('/projects')} icon={Upload}>
+              {activeProjectId ? 'Upload New Video' : 'Create a project first'}
             </Button>
 
             {/* Source Video Dropdown Selector */}
             <select
-              value={selectedAssetId}
+              value={selectedAssetId || ''}
               onChange={(e) => setSelectedAssetId(e.target.value)}
               className="h-[32px] bg-white border border-border-subtle hover:border-border-strong text-ink-primary text-xs font-semibold rounded-btn px-3 cursor-pointer max-w-xs truncate"
             >
+              {videoAssets.length === 0 && <option value="">No video assets</option>}
               {videoAssets.map((v) => (
                 <option key={v.id} value={v.id}>
-                  {v.isDemo === false ? `[User Upload] ${v.filename}` : `[Demo] ${v.filename}`}
+                  {v.filename}
                 </option>
               ))}
             </select>
 
-            <Button variant="secondary" onClick={handleRunAnalyzer} isLoading={analyzing} icon={Sparkles}>
+            <Button variant="secondary" onClick={handleRunAnalyzer} isLoading={analyzing} icon={Sparkles} disabled={!activeAsset}>
               Analyze Selected Video
             </Button>
 
@@ -255,10 +223,10 @@ export const ClipStudioPage = () => {
       >
         <MetadataStrip
           items={[
-            { label: 'SOURCE TYPE', value: activeAsset?.isDemo === false ? 'User Uploaded Video' : 'Sample Demo Video', mono: true },
+            { label: 'SOURCE TYPE', value: activeAsset ? 'User Uploaded Video' : 'No video selected', mono: true },
             { label: 'AI ENGINE', value: 'Gemini 1.5 Pro Content Intelligence', mono: true },
-            { label: 'DURATION', value: `${activeAsset?.duration || 160.0}s`, mono: true },
-            { label: 'RETENTION SCORE', value: `${retentionAnalysis?.overall_retention_score || 88.5}% (Heuristic)`, mono: true }
+            { label: 'DURATION', value: activeAsset?.duration ? `${activeAsset.duration}s` : '—', mono: true },
+            { label: 'RETENTION SCORE', value: retentionAnalysis ? `${retentionAnalysis.overall_retention_score}%` : '—', mono: true }
           ]}
           syncStatus="VIDEO SOURCE ACTIVE"
         />
@@ -324,31 +292,34 @@ export const ClipStudioPage = () => {
             <Panel className="p-0 overflow-hidden" bodyClassName="p-0">
               <div className="bg-backdrop p-3 relative aspect-video flex items-center justify-center">
                 <div className="absolute top-3 left-3 bg-black/70 backdrop-blur-sm text-white font-mono text-[10px] px-2 py-0.5 rounded-chip border border-white/10 z-10">
-                  {activeAsset?.isDemo === false ? 'USER UPLOADED VIDEO' : 'DEMO SAMPLE VIDEO'}
+                  {activeAsset ? 'USER UPLOADED VIDEO' : 'NO VIDEO SELECTED'}
                 </div>
-                <video
-                  ref={videoRef}
-                  src={videoSrc || activeAsset?.url || "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"}
-                  onLoadedMetadata={(e) => {
-                    if (e.target.duration && activeAsset && activeAsset.duration !== Math.round(e.target.duration * 10) / 10) {
-                      updateAssetDuration(activeAsset.id, e.target.duration);
-                    }
-                  }}
-                  onTimeUpdate={() => videoRef.current && setCurrentTime(videoRef.current.currentTime)}
-                  controls
-                  className="w-full h-full object-contain"
-                />
+                {activeAsset && (
+                  <video
+                    ref={videoRef}
+                    src={videoSrc || activeAsset.url}
+                    onLoadedMetadata={(e) => {
+                      if (e.target.duration && activeAsset.duration !== Math.round(e.target.duration * 10) / 10) {
+                        updateAssetDuration(activeAsset.id, e.target.duration);
+                      }
+                    }}
+                    onTimeUpdate={() => videoRef.current && setCurrentTime(videoRef.current.currentTime)}
+                    controls
+                    className="w-full h-full object-contain"
+                  />
+                )}
               </div>
 
               <div className="bg-surface-inset px-4 py-2 border-t border-border-subtle space-y-2">
                 <div className="relative h-3 bg-border-subtle rounded-full overflow-hidden cursor-pointer flex items-center" onClick={(e) => {
                   const rect = e.currentTarget.getBoundingClientRect();
                   const pct = (e.clientX - rect.left) / rect.width;
-                  handleSeekVideo(pct * (activeAsset?.duration || 160.0));
+                  handleSeekVideo(pct * (activeAsset?.duration || 0));
                 }}>
                   {moments.map((m) => {
-                    const startPct = (m.start_time / (activeAsset?.duration || 160.0)) * 100;
-                    const widthPct = (m.duration / (activeAsset?.duration || 160.0)) * 100;
+                    const duration = activeAsset?.duration || 1;
+                    const startPct = (m.start_time / duration) * 100;
+                    const widthPct = (m.duration / duration) * 100;
                     const isActive = m.id === activeMoment?.id;
                     return (
                       <div
@@ -374,7 +345,7 @@ export const ClipStudioPage = () => {
                       {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
                     </Button>
                     <span className="font-mono text-mono-val font-semibold text-ink-primary">
-                      {currentTime.toFixed(1)}s / {(activeAsset?.duration || 160.0).toFixed(1)}s
+                      {currentTime.toFixed(1)}s / {activeAsset?.duration ? `${activeAsset.duration.toFixed(1)}s` : '—'}
                     </span>
                   </div>
                 </div>
@@ -478,7 +449,7 @@ export const ClipStudioPage = () => {
         </div>
 
         <div className="flex items-center gap-3">
-          <Button variant="primary" onClick={handleBatchGenerate} icon={ArrowRight}>
+          <Button variant="primary" onClick={handleBatchGenerate} icon={ArrowRight} disabled={!activeAsset || selectedCandidateIds.length === 0}>
             Generate & Open in Video Editor
           </Button>
         </div>

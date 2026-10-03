@@ -1,5 +1,4 @@
 import React from 'react';
-import { INITIAL_ANALYTICS } from '../data/mockData';
 import { PageHeader } from '../components/ui/PageHeader';
 import { StatTile } from '../components/ui/StatTile';
 import { Panel } from '../components/ui/Panel';
@@ -29,7 +28,7 @@ export const AnalyticsPage = () => {
     <div className="space-y-5 max-w-[1600px] mx-auto">
       <PageHeader
         title="Performance Analytics"
-        metaChip="Simulated Metrics & Platform Benchmarks"
+        metaChip="Analytics data unavailable"
         breadcrumbs={[
           { label: 'CreatorAI', path: '/' },
           { label: 'Analytics' }
@@ -38,10 +37,10 @@ export const AnalyticsPage = () => {
 
       {/* Row of Stat Tiles */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatTile label="TOTAL VIEWS" value={INITIAL_ANALYTICS.totalViews} subtext="+24.8% vs last month" icon={Eye} accent />
-        <StatTile label="AVG ENGAGEMENT RATE" value={INITIAL_ANALYTICS.avgEngagement} subtext="+1.4% retention" icon={TrendingUp} />
-        <StatTile label="PUBLISHED CLIPS" value={INITIAL_ANALYTICS.publishedClips} subtext="14 active clips" icon={Film} />
-        <StatTile label="SHARES & REPOSTS" value="12.4K" subtext="+18.2% viral reach" icon={Share2} />
+        <StatTile label="TOTAL VIEWS" value="—" subtext="No analytics data available" icon={Eye} accent />
+        <StatTile label="AVG ENGAGEMENT RATE" value="—" subtext="No analytics data available" icon={TrendingUp} />
+        <StatTile label="PUBLISHED CLIPS" value="—" subtext="No analytics data available" icon={Film} />
+        <StatTile label="SHARES & REPOSTS" value="—" subtext="No analytics data available" icon={Share2} />
       </div>
 
       {/* 2-Column Chart Panels */}
@@ -51,7 +50,7 @@ export const AnalyticsPage = () => {
           <Panel title="Daily Views Growth Trend" subtitle="Clean line performance metric">
             <div className="h-64 pt-2">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={INITIAL_ANALYTICS.weeklyPerformance}>
+                <LineChart data={[]}>
                   <XAxis dataKey="day" stroke="#7A8499" fontSize={11} />
                   <YAxis stroke="#7A8499" fontSize={11} />
                   <Tooltip
@@ -69,15 +68,15 @@ export const AnalyticsPage = () => {
           <Panel title="Platform Breakdown" subtitle="Distribution by views">
             <div className="h-64 pt-2">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={INITIAL_ANALYTICS.platformBreakdown}>
+                <BarChart data={[]}>
                   <XAxis dataKey="name" stroke="#7A8499" fontSize={9} />
                   <YAxis stroke="#7A8499" fontSize={11} />
                   <Tooltip
                     contentStyle={{ backgroundColor: '#FFFFFF', borderColor: '#E3E7EF', borderRadius: '6px', fontSize: '12px' }}
                   />
                   <Bar dataKey="views" radius={[4, 4, 0, 0]}>
-                    {INITIAL_ANALYTICS.platformBreakdown.map((_, index) => (
-                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    {COLORS.map((color, index) => (
+                      <Cell key={`cell-${index}`} fill={color} />
                     ))}
                   </Bar>
                 </BarChart>

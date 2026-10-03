@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { INITIAL_PROJECTS, INITIAL_ASSETS, INITIAL_TRANSCRIPT, INITIAL_CLIPS } from '../data/mockData';
 import { api } from '../services/api';
 
 export const useStore = create((set, get) => ({
@@ -24,13 +23,13 @@ export const useStore = create((set, get) => ({
         avatar: 'SD'
       },
 
-      activeProjectId: 'proj_1',
-      activeClipId: 'clip_1',
+      activeProjectId: null,
+      activeClipId: null,
 
-      projects: INITIAL_PROJECTS,
-      assets: INITIAL_ASSETS,
-      transcript: INITIAL_TRANSCRIPT,
-      clips: INITIAL_CLIPS,
+      projects: [],
+      assets: [],
+      transcript: [],
+      clips: [],
       candidateMoments: [],
       scriptMatches: [],
 
@@ -49,10 +48,10 @@ export const useStore = create((set, get) => ({
           const workspace = await api.getWorkspace();
           const activeProjectId = workspace.projects.some((project) => project.id === get().activeProjectId)
             ? get().activeProjectId
-            : workspace.projects[0]?.id;
+            : workspace.projects[0]?.id || null;
           const activeClipId = workspace.clips.some((clip) => clip.id === get().activeClipId)
             ? get().activeClipId
-            : workspace.clips[0]?.id;
+            : workspace.clips[0]?.id || null;
           const savedState = activeProjectId ? await api.getProjectState(activeProjectId) : {};
           set({
             projects: workspace.projects,
@@ -60,7 +59,7 @@ export const useStore = create((set, get) => ({
             clips: workspace.clips,
             activeProjectId,
             activeClipId,
-            transcript: savedState.transcript?.data || INITIAL_TRANSCRIPT,
+            transcript: savedState.transcript?.data || [],
             candidateMoments: savedState.candidateMoments?.data || [],
             scriptMatches: savedState.scriptMatches?.data || [],
             retentionAnalysis: savedState.retentionAnalysis?.data || null,
@@ -85,7 +84,7 @@ export const useStore = create((set, get) => ({
         try {
           const savedState = await api.getProjectState(projectId);
           set({
-            transcript: savedState.transcript?.data || INITIAL_TRANSCRIPT,
+            transcript: savedState.transcript?.data || [],
             candidateMoments: savedState.candidateMoments?.data || [],
             scriptMatches: savedState.scriptMatches?.data || [],
             retentionAnalysis: savedState.retentionAnalysis?.data || null,
@@ -126,7 +125,7 @@ export const useStore = create((set, get) => ({
           set((state) => ({
             projects: [newProject, ...state.projects.filter((project) => project.id !== newProject.id)],
             activeProjectId: newProject.id,
-            transcript: INITIAL_TRANSCRIPT,
+            transcript: [],
             candidateMoments: [],
             scriptMatches: [],
             retentionAnalysis: null,
@@ -144,6 +143,9 @@ export const useStore = create((set, get) => ({
       addAsset: async (assetData, alreadyPersisted = false) => {
         const fileType = assetData.fileType || assetData.file_type || 'video';
         const projectId = assetData.projectId || assetData.project_id || get().activeProjectId;
+        if (!projectId) {
+          throw new Error('Create a project before adding assets.');
+        }
         try {
           const savedAsset = alreadyPersisted ? assetData : await api.createAsset({ ...assetData, projectId });
           const newAsset = {
@@ -523,7 +525,7 @@ export const useStore = create((set, get) => ({
       generateClip: async (candidate) => {
         const clipData = {
           projectId: get().activeProjectId,
-          assetId: candidate.assetId || 'asset_v1',
+          assetId: candidate.assetId || null,
           title: candidate.title || 'Generated Clip',
           startTime: candidate.start_time || candidate.startTime || 0.0,
           endTime: candidate.end_time || candidate.endTime || 30.0,
@@ -644,7 +646,7 @@ export const useStore = create((set, get) => ({
         const clip = get().clips.find((c) => c.id === clipId);
         if (!clip) return;
 
-        const res = await api.generateContent(clipId, clip.caption || 'Sample segment', platform, 'curious', 'AI Creator Workflow', get().aiProvider);
+        const res = await api.generateContent(clipId, clip.caption || '', platform, 'curious', 'AI Creator Workflow', get().aiProvider);
 
         if (res) {
           set((state) => ({
@@ -670,7 +672,7 @@ export const useStore = create((set, get) => ({
           const newClips = res.cards.map((card, idx) => ({
             id: `clip_plan_${Date.now()}_${idx}`,
             projectId: get().activeProjectId,
-            assetId: 'asset_v1',
+            assetId: null,
             title: card.title,
             startTime: 0.0,
             endTime: 30.0,
