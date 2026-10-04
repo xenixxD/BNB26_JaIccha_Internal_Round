@@ -13,13 +13,10 @@ import {
   Search,
   Video,
   FileText,
-  Music,
-  Image as ImageIcon,
   Trash2,
   Eye,
   Sparkles,
-  HardDrive,
-  Filter
+  HardDrive
 } from 'lucide-react';
 
 export const AssetLibraryPage = () => {
@@ -36,14 +33,14 @@ export const AssetLibraryPage = () => {
     return matchesType && matchesSearch;
   });
 
-  const totalBytes = assets.reduce((acc, curr) => acc + (curr.fileSize || 0), 0);
+  const totalBytes = assets.reduce((acc, curr) => acc + (curr.fileSize ?? curr.file_size ?? 0), 0);
 
   return (
     <div className="space-y-5 max-w-[1600px] mx-auto">
       {/* Page Header */}
       <PageHeader
         title="Smart Asset Manager"
-        metaChip={`Persistent Local Server Storage`}
+        metaChip="Project footage and scripts"
         breadcrumbs={[
           { label: 'CreatorAI', path: '/' },
           { label: 'Asset Library' }
@@ -89,16 +86,13 @@ export const AssetLibraryPage = () => {
               <div className="p-3 bg-surface-inset rounded-panel border border-border-subtle space-y-2">
                 <div className="flex items-center justify-between text-xs">
                   <span className="font-semibold text-ink-primary flex items-center gap-1.5">
-                    <HardDrive className="w-3.5 h-3.5 text-accent" /> Storage Used
+                    <HardDrive className="w-3.5 h-3.5 text-accent" /> Uploaded file size
                   </span>
                   <span className="font-mono text-mono-val font-bold text-ink-primary">
                     {(totalBytes / 1024 / 1024).toFixed(1)} MB
                   </span>
                 </div>
-                <div className="h-2 bg-border-subtle rounded-full overflow-hidden">
-                  <div className="h-full bg-accent w-[35%]" />
-                </div>
-                <span className="text-[10px] text-ink-muted block font-mono">Server-local assets + SQLite metadata</span>
+                <span className="text-[10px] text-ink-muted block">Total size of files in this workspace</span>
               </div>
             </div>
           </Panel>
@@ -135,7 +129,7 @@ export const AssetLibraryPage = () => {
                 {filteredAssets.length === 0 ? (
                   <tr>
                     <td colSpan={6} className="text-center py-10 text-ink-muted">
-                      No assets found. Upload media to begin.
+                      {assets.length === 0 ? 'No footage or scripts yet. Upload a video or add a script to begin.' : 'No files match this search or filter.'}
                     </td>
                   </tr>
                 ) : (
@@ -145,11 +139,11 @@ export const AssetLibraryPage = () => {
                         {asset.fileType === 'video' ? <Video className="w-4 h-4 text-accent stroke-[1.75]" /> : <FileText className="w-4 h-4 text-status-warning stroke-[1.75]" />}
                         <span className="truncate max-w-xs">{asset.filename}</span>
                       </td>
-                      <td className="py-2.5 px-4 uppercase font-mono text-mono-val font-semibold text-ink-secondary">{asset.fileType}</td>
-                      <td className="py-2.5 px-4 font-mono text-mono-val">{asset.fileSize ? (asset.fileSize / 1024 / 1024).toFixed(1) + ' MB' : '4.2 KB'}</td>
-                      <td className="py-2.5 px-4 text-ink-muted">{asset.uploadDate}</td>
+                      <td className="py-2.5 px-4 uppercase font-mono text-mono-val font-semibold text-ink-secondary">{asset.fileType || asset.file_type || 'File'}</td>
+                      <td className="py-2.5 px-4 font-mono text-mono-val">{(asset.fileSize ?? asset.file_size) != null ? ((asset.fileSize ?? asset.file_size) / 1024 / 1024).toFixed(1) + ' MB' : '—'}</td>
+                      <td className="py-2.5 px-4 text-ink-muted">{asset.uploadDate || asset.upload_date || '—'}</td>
                       <td className="py-2.5 px-4">
-                        <Badge variant="success" size="sm">Ready</Badge>
+                        <Badge variant={asset.status === 'error' ? 'warning' : 'success'} size="sm">{asset.status || 'Ready'}</Badge>
                       </td>
                       <td className="py-2.5 px-4 text-right space-x-1">
                         <Button variant="ghost" size="sm" onClick={() => setPreviewAsset(asset)} icon={Eye} title="Preview" />
@@ -188,13 +182,17 @@ export const AssetLibraryPage = () => {
               <Button variant="ghost" size="sm" onClick={() => setPreviewAsset(null)}>✕</Button>
             </div>
             <div className="p-4 space-y-3">
-              {previewAsset.fileType === 'video' ? (
+              {(previewAsset.fileType || previewAsset.file_type) === 'video' ? (
                 <div className="rounded-btn overflow-hidden bg-backdrop aspect-video flex items-center justify-center">
                   <video src={previewAsset.url} controls className="w-full h-full object-contain" />
                 </div>
+              ) : (previewAsset.fileType || previewAsset.file_type) === 'audio' ? (
+                <audio src={previewAsset.url} controls className="w-full" />
+              ) : (previewAsset.fileType || previewAsset.file_type) === 'image' ? (
+                <img src={previewAsset.url} alt={previewAsset.filename} className="max-h-80 max-w-full mx-auto object-contain" />
               ) : (
                 <div className="bg-surface-inset p-4 rounded-btn border border-border-subtle font-mono text-xs text-ink-primary max-h-60 overflow-y-auto whitespace-pre-wrap">
-                  {previewAsset.content || 'Script text asset content loaded.'}
+                  {previewAsset.content || 'This file does not include previewable text.'}
                 </div>
               )}
               <div className="flex justify-end">

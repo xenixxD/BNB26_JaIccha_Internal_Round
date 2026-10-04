@@ -85,13 +85,13 @@ export const api = {
       return res.data;
     } catch (err) {
       return {
-        status: "demo_fallback",
+        status: "unavailable",
         ffmpeg_available: false,
         ffmpeg_path: null,
         gemini_configured: false,
         groq_configured: false,
         whisper_available: false,
-        version: "1.2.0 (Offline Demo Mode)"
+        version: null
       };
     }
   },
@@ -115,33 +115,22 @@ export const api = {
   },
 
   async analyzePotential(assetId, provider = 'auto') {
-    try {
       const res = await axios.post(`${API_BASE}/ai/analyze-potential`, {
         asset_id: assetId,
         provider: provider
       }, { timeout: 15000 });
       return res.data;
-    } catch (err) {
-      console.warn('Using client AI potential fallback:', err);
-      return null;
-    }
   },
 
   async analyzeRetention(assetId, provider = 'auto') {
-    try {
       const res = await axios.post(`${API_BASE}/ai/analyze-retention`, {
         asset_id: assetId,
         provider: provider
       }, { timeout: 15000 });
       return res.data;
-    } catch (err) {
-      console.warn('Using client retention analysis fallback:', err);
-      return null;
-    }
   },
 
   async generateAbHooks(clipId, segmentText, tone = 'curious', audience = 'Creators & Engineers', provider = 'auto') {
-    try {
       const res = await axios.post(`${API_BASE}/ai/ab-hooks`, {
         clip_id: clipId,
         segment_text: segmentText,
@@ -150,14 +139,9 @@ export const api = {
         provider: provider
       }, { timeout: 15000 });
       return res.data;
-    } catch (err) {
-      console.warn('Using client A/B hook lab fallback:', err);
-      return null;
-    }
   },
 
   async generatePlannerIdeas(topic, niche = 'Tech & AI', days = 7, provider = 'auto') {
-    try {
       const res = await axios.post(`${API_BASE}/ai/planner-generate`, {
         topic: topic,
         niche: niche,
@@ -165,10 +149,6 @@ export const api = {
         provider: provider
       }, { timeout: 15000 });
       return res.data;
-    } catch (err) {
-      console.warn('Using client planner fallback:', err);
-      return null;
-    }
   },
 
   async matchScript(assetId, scriptText, scriptTitle = 'Script') {
@@ -210,7 +190,6 @@ export const api = {
   },
 
   async generateContent(clipId, transcriptSegment, platform = 'instagram_reels', tone = 'curious', topic = 'AI Creator Workflow', provider = 'auto') {
-    try {
       const res = await axios.post(`${API_BASE}/ai/generate-content`, {
         clip_id: clipId,
         transcript_segment: transcriptSegment,
@@ -220,10 +199,6 @@ export const api = {
         provider: provider
       }, { timeout: 15000 });
       return res.data;
-    } catch (err) {
-      console.warn('Using client AI content gen fallback:', err);
-      return null;
-    }
   },
 
   async transcribeMedia(assetId) {
@@ -236,7 +211,6 @@ export const api = {
   },
 
   async trimClip(assetId, videoUrl, startTime, endTime, aspectRatio = '9:16', clipId) {
-    try {
       const res = await axios.post(`${API_BASE}/clips/trim`, {
         asset_id: assetId,
         clip_id: clipId,
@@ -246,24 +220,5 @@ export const api = {
         aspect_ratio: aspectRatio
       }, { timeout: 120000 });
       return res.data;
-    } catch (err) {
-      console.warn('Using client video export fallback:', err);
-      return {
-        task_id: `demo_${Date.now()}`,
-        clip_id: `clip_${Date.now()}`,
-        status: 'failed',
-        progress: 0.0,
-        output_filename: null,
-        output_url: null,
-        file_size_bytes: 0,
-        duration_seconds: round(endTime - startTime, 2),
-        error_message: 'FFmpeg server endpoint offline. Export disabled (Preview Mode Active).',
-        ffmpeg_used: false
-      };
-    }
   }
 };
-
-function round(val, decimals) {
-  return Number(Math.round(val + 'e' + decimals) + 'e-' + decimals);
-}

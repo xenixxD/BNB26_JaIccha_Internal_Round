@@ -25,7 +25,7 @@ export function App() {
   }, [hydrateWorkspace, fetchSystemHealth]);
 
   if (!workspaceReady) {
-    return <div className="min-h-screen flex items-center justify-center text-sm text-slate-500">Loading local workspace...</div>;
+    return <div className="min-h-screen flex items-center justify-center text-sm text-slate-500">Loading your workspace…</div>;
   }
 
   if (workspaceLoadFailed) {
@@ -35,7 +35,7 @@ export function App() {
           {workspaceError}
         </p>
         <button className="rounded bg-indigo-600 px-4 py-2 text-sm text-white" onClick={hydrateWorkspace}>
-          Retry local workspace connection
+          Try connecting again
         </button>
       </main>
     );

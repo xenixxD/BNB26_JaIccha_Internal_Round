@@ -3,32 +3,17 @@ import { useNavigate } from 'react-router-dom';
 import { useStore } from '../store/useStore';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
-import { Panel } from '../components/ui/Panel';
 import {
   Play,
   Pause,
-  RotateCcw,
-  Volume2,
-  Maximize2,
   Download,
   Calendar,
-  Copy,
-  Check,
   Smartphone,
   Monitor,
   Square,
-  Undo2,
-  Redo2,
-  Sliders,
-  Scissors,
   Sparkles,
-  Layers,
-  Lock,
-  Eye,
   Type,
-  Music,
   Film,
-  Loader2,
   CheckCircle2,
   AlertTriangle
 } from 'lucide-react';
@@ -38,6 +23,7 @@ export const VideoEditorPage = () => {
   const videoRef = useRef(null);
   const {
     clips,
+    activeProjectId,
     activeClipId,
     setActiveClip,
     assets,
@@ -53,8 +39,9 @@ export const VideoEditorPage = () => {
     draftVersions
   } = useStore();
 
-  const currentClip = clips.find((c) => c.id === activeClipId) || clips[0];
-  const currentAsset = assets.find((a) => a.id === currentClip?.assetId) || assets[0];
+  const projectClips = clips.filter((clip) => clip.projectId === activeProjectId);
+  const currentClip = projectClips.find((clip) => clip.id === activeClipId) || projectClips[0];
+  const currentAsset = assets.find((a) => a.id === currentClip?.assetId);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -62,11 +49,12 @@ export const VideoEditorPage = () => {
   const [selectedPlatform, setSelectedPlatform] = useState('instagram_reels');
   const [exporting, setExporting] = useState(false);
   const [exportResult, setExportResult] = useState(null);
-  const [copiedField, setCopiedField] = useState(null);
-  const [leftTab, setLeftTab] = useState('media'); // 'media' | 'captions' | 'audio'
-  const [timelineZoom, setTimelineZoom] = useState(100);
   const [savingDraft, setSavingDraft] = useState(false);
+  const [draftSaved, setDraftSaved] = useState(false);
   const [draftError, setDraftError] = useState('');
+  const [exportError, setExportError] = useState('');
+  const [generatingContent, setGeneratingContent] = useState(false);
+  const [contentError, setContentError] = useState('');
 
   useEffect(() => {
     setVideoSrc(currentAsset?.url || null);
@@ -82,14 +70,17 @@ export const VideoEditorPage = () => {
     }
   }, [currentClip?.id, currentClip?.startTime]);
 
-  const togglePlay = () => {
+  const togglePlay = async () => {
     if (videoRef.current) {
       if (isPlaying) {
         videoRef.current.pause();
       } else {
-        videoRef.current.play();
+        try {
+          await videoRef.current.play();
+        } catch {
+          setExportError('This video could not be played. Check that the source file is still available.');
+        }
       }
-      setIsPlaying(!isPlaying);
     }
   };
 
@@ -110,17 +101,26 @@ export const VideoEditorPage = () => {
     setExporting(true);
     setExportResult(null);
 
-    const result = await exportClip(currentClip.id);
-    setExporting(false);
-    setExportResult(result);
+    setExportError('');
+    try {
+      const result = await exportClip(currentClip.id);
+      setExportResult(result);
+      if (result.status !== 'completed') setExportError(result.error_message || 'Export did not finish. Check the server and try again.');
+    } catch (error) {
+      setExportError(readableError(error, 'Export failed. Check the server and try again.'));
+    } finally {
+      setExporting(false);
+    }
   };
 
   const handleSaveDraft = async () => {
     if (!currentClip || savingDraft) return;
     setSavingDraft(true);
+    setDraftSaved(false);
     setDraftError('');
     try {
       await saveDraft(currentClip.id);
+      setDraftSaved(true);
     } catch (error) {
       setDraftError(error.message || 'Draft could not be saved.');
     } finally {
@@ -141,10 +141,16 @@ export const VideoEditorPage = () => {
     }
   };
 
-  const copyToClipboard = (text, fieldName) => {
-    navigator.clipboard.writeText(text);
-    setCopiedField(fieldName);
-    setTimeout(() => setCopiedField(null), 2000);
+  const generateContent = async () => {
+    setGeneratingContent(true);
+    setContentError('');
+    try {
+      await generateAiContentForClip(currentClip.id, selectedPlatform);
+    } catch (error) {
+      setContentError(readableError(error, 'AI suggestions could not be generated. Try again.'));
+    } finally {
+      setGeneratingContent(false);
+    }
   };
 
   if (!currentClip) {
@@ -156,10 +162,10 @@ export const VideoEditorPage = () => {
   }
 
   return (
-    <div className="h-[calc(100vh-56px)] flex flex-col -m-5 md:-m-6 overflow-hidden bg-canvas">
+    <div className="min-h-[calc(100vh-112px)] md:h-[calc(100vh-56px)] flex flex-col -m-4 md:-m-6 overflow-hidden bg-canvas">
       {/* 1. TOP EDITOR TOOLBAR (40-44px) */}
-      <div className="h-[42px] bg-white border-b border-border-subtle px-4 flex items-center justify-between shrink-0 z-20">
-        <div className="flex items-center gap-3">
+      <div className="min-h-[42px] bg-white border-b border-border-subtle px-3 py-2 flex flex-wrap items-center justify-between gap-2 shrink-0 z-20">
+        <div className="flex items-center gap-2 overflow-x-auto max-w-full">
           <input
             type="text"
             value={currentClip.title}
@@ -170,13 +176,11 @@ export const VideoEditorPage = () => {
           <div className="h-4 w-[1px] bg-border-subtle" />
 
           <div className="flex items-center gap-1">
-            <Button variant="ghost" size="sm" title="Undo"><Undo2 className="w-3.5 h-3.5" /></Button>
-            <Button variant="ghost" size="sm" title="Redo"><Redo2 className="w-3.5 h-3.5" /></Button>
           </div>
 
           <div className="flex items-center gap-1.5 text-micro text-ink-muted font-mono font-semibold">
             <span className="w-1.5 h-1.5 rounded-full bg-status-success inline-block"></span>
-            <span>LOCAL DRAFT STORAGE</span>
+            <span>Save changes with “Save draft”</span>
           </div>
         </div>
 
@@ -219,11 +223,11 @@ export const VideoEditorPage = () => {
             })}
           </div>
           <Button variant="secondary" size="sm" onClick={handleSaveToPlanner} icon={Calendar}>
-            Save to Planner
+            Mark ready
           </Button>
 
-          <Button variant="primary" size="sm" onClick={handleExportClip} isLoading={exporting} icon={Download}>
-            Export Video (FFmpeg)
+          <Button variant="primary" size="sm" onClick={handleExportClip} isLoading={exporting} icon={Download} disabled={!currentAsset || !currentClip.assetId}>
+            Export video
           </Button>
         </div>
       </div>
@@ -232,36 +236,16 @@ export const VideoEditorPage = () => {
           {draftError}
         </div>
       )}
+      {draftSaved && <div role="status" className="px-4 py-2 bg-emerald-50 text-emerald-800 text-xs border-b border-emerald-200">A draft version was saved to this project.</div>}
+      {exportError && <div role="alert" className="px-4 py-2 bg-rose-50 text-rose-700 text-xs border-b border-rose-200">{exportError}</div>}
 
       {/* 2. MAIN WORKSPACE (Left Media, Center Preview, Right Inspector) */}
-      <div className="flex-1 flex min-h-0 overflow-hidden">
+      <div className="flex-1 flex min-h-0 overflow-y-auto md:overflow-hidden flex-col md:flex-row">
         {/* LEFT PANEL: Media & Captions (280px) */}
-        <div className="w-[280px] bg-white border-r border-border-subtle flex flex-col shrink-0">
-          <div className="flex border-b border-border-subtle px-3 pt-2">
-            {[
-              { id: 'media', label: 'Media', icon: Film },
-              { id: 'captions', label: 'Captions', icon: Type },
-              { id: 'audio', label: 'Audio', icon: Music },
-            ].map((tab) => {
-              const Icon = tab.icon;
-              const isActive = leftTab === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => setLeftTab(tab.id)}
-                  className={`pb-2 text-xs font-semibold px-3 border-b-2 flex items-center gap-1.5 transition-colors cursor-pointer ${
-                    isActive ? 'border-accent text-accent' : 'border-transparent text-ink-muted hover:text-ink-primary'
-                  }`}
-                >
-                  <Icon className="w-3.5 h-3.5" />
-                  <span>{tab.label}</span>
-                </button>
-              );
-            })}
-          </div>
-
+        <div className="w-full md:w-[280px] max-h-36 md:max-h-none bg-white border-b md:border-b-0 md:border-r border-border-subtle flex flex-col shrink-0">
+          <div className="border-b border-border-subtle px-4 py-3 text-xs font-semibold text-ink-primary">Draft clips</div>
           <div className="p-3 overflow-y-auto flex-1 space-y-2">
-            {clips.map((clip) => {
+            {projectClips.map((clip) => {
               const isActive = clip.id === currentClip.id;
               return (
                 <div
@@ -273,7 +257,7 @@ export const VideoEditorPage = () => {
                 >
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-ink-primary truncate">{clip.title}</span>
-                    <Badge variant="score" size="sm">{clip.potentialScore}%</Badge>
+                    {clip.potentialScore > 0 && <Badge variant="score" size="sm">{clip.potentialScore}%</Badge>}
                   </div>
                   <div className="flex items-center justify-between text-[11px] text-ink-muted">
                     <span>{clip.duration}s • {clip.aspectRatio}</span>
@@ -286,7 +270,7 @@ export const VideoEditorPage = () => {
         </div>
 
         {/* CENTER PREVIEW CANVAS */}
-        <div className="flex-1 bg-backdrop flex flex-col items-center justify-center p-4 relative min-w-0">
+        <div className="flex-1 min-h-[320px] bg-backdrop flex flex-col items-center justify-center p-4 relative min-w-0">
           <div className="relative flex-1 max-h-[70%] aspect-video flex items-center justify-center">
             {/* Dynamic Aspect Ratio Canvas Box */}
             <div
@@ -302,6 +286,8 @@ export const VideoEditorPage = () => {
                 <video
                   ref={videoRef}
                   src={videoSrc || currentAsset.url}
+                  onPlay={() => setIsPlaying(true)}
+                  onPause={() => setIsPlaying(false)}
                   onLoadedMetadata={(e) => {
                     if (e.target.duration && currentAsset.duration !== Math.round(e.target.duration * 10) / 10) {
                       updateAssetDuration(currentAsset.id, e.target.duration);
@@ -339,14 +325,12 @@ export const VideoEditorPage = () => {
 
             <div className="flex items-center gap-2 font-mono text-mono-val text-slate-400">
               <span>Duration: {currentClip.duration}s</span>
-              <Volume2 className="w-3.5 h-3.5" />
-              <Maximize2 className="w-3.5 h-3.5" />
             </div>
           </div>
         </div>
 
         {/* RIGHT INSPECTOR PANEL (300px) */}
-        <div className="w-[300px] bg-white border-l border-border-subtle p-4 space-y-4 overflow-y-auto shrink-0">
+        <div className="w-full md:w-[300px] max-h-[360px] md:max-h-none bg-white border-t md:border-t-0 md:border-l border-border-subtle p-4 space-y-4 overflow-y-auto shrink-0">
           <div className="border-b border-border-subtle pb-3">
             <h3 className="text-micro text-ink-muted uppercase tracking-widest font-semibold">CLIP INSPECTOR & AI CONTENT</h3>
           </div>
@@ -366,9 +350,10 @@ export const VideoEditorPage = () => {
             </select>
           </div>
 
-          <Button variant="soft" onClick={() => generateAiContentForClip(currentClip.id, selectedPlatform)} icon={Sparkles} className="w-full">
-            Generate AI Hooks & Captions
+          <Button variant="soft" onClick={generateContent} isLoading={generatingContent} icon={Sparkles} className="w-full">
+            Generate hooks and captions
           </Button>
+          {contentError && <p role="alert" className="text-xs text-rose-700">{contentError}</p>}
 
           {/* AI Hooks */}
           <div className="space-y-2">
@@ -459,15 +444,14 @@ export const VideoEditorPage = () => {
           </div>
 
           <div className="flex items-center gap-3">
-            <label className="text-[11px] text-ink-muted font-semibold">Zoom:</label>
-            <input
-              type="range"
-              min="50"
-              max="200"
-              value={timelineZoom}
-              onChange={(e) => setTimelineZoom(Number(e.target.value))}
-              className="w-24 accent-accent cursor-pointer"
-            />
+            <label className="flex items-center gap-1 text-[11px] text-ink-muted font-semibold">
+              Start
+              <input aria-label="Clip start time in seconds" type="number" min="0" max={Math.max(0, (currentAsset?.duration || currentClip.endTime) - 1)} step="0.1" value={currentClip.startTime} onChange={(event) => updateClipTimestamps(currentClip.id, event.target.value, currentClip.endTime)} className="w-20 rounded border border-border-subtle px-1.5 py-1 font-mono text-ink-primary" />
+            </label>
+            <label className="flex items-center gap-1 text-[11px] text-ink-muted font-semibold">
+              End
+              <input aria-label="Clip end time in seconds" type="number" min={currentClip.startTime + 1} max={currentAsset?.duration || currentClip.endTime} step="0.1" value={currentClip.endTime} onChange={(event) => updateClipTimestamps(currentClip.id, currentClip.startTime, event.target.value)} className="w-20 rounded border border-border-subtle px-1.5 py-1 font-mono text-ink-primary" />
+            </label>
           </div>
         </div>
 
@@ -509,3 +493,10 @@ export const VideoEditorPage = () => {
     </div>
   );
 };
+
+function readableError(error, fallback) {
+  const detail = error.response?.data?.detail;
+  if (typeof detail === 'string') return detail;
+  if (detail?.message) return detail.message;
+  return error.message || fallback;
+}

@@ -1,44 +1,35 @@
 import React from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { NavLink } from 'react-router-dom';
 import { useStore } from '../../store/useStore';
 import {
   LayoutDashboard,
   FolderKanban,
   FolderSearch,
-  Sparkles,
-  FileCheck,
-  Film,
   Video,
   CalendarDays,
   BarChart3,
   Settings,
   Plus,
-  ChevronsUpDown,
-  LogOut,
-  Layers
+  ChevronDown
 } from 'lucide-react';
 
 export const Sidebar = ({ onOpenNewProjectModal }) => {
-  const location = useLocation();
   const { projects, activeProjectId, setActiveProject, user } = useStore();
 
   const activeProj = projects.find((p) => p.id === activeProjectId) || projects[0];
 
   const navItems = [
-    { name: 'Dashboard', path: '/', icon: LayoutDashboard },
+    { name: 'Home', path: '/', icon: LayoutDashboard },
     { name: 'Projects', path: '/projects', icon: FolderKanban, badge: projects.length },
-    { name: 'Asset Library', path: '/assets', icon: FolderSearch },
-    { name: 'AI Potential Analyzer', path: '/clip-studio', icon: Sparkles },
-    { name: 'AI Script Matcher', path: '/clip-studio', icon: FileCheck },
-    { name: 'AI Clip Studio', path: '/clip-studio', icon: Film },
-    { name: 'Video Editor', path: '/video-editor', icon: Video },
-    { name: 'Content Planner', path: '/planner', icon: CalendarDays },
+    { name: 'Footage', path: '/assets', icon: FolderSearch },
+    { name: 'Find clips', path: '/clip-studio', icon: Video },
+    { name: 'Planner', path: '/planner', icon: CalendarDays },
     { name: 'Analytics', path: '/analytics', icon: BarChart3 },
     { name: 'Settings', path: '/settings', icon: Settings },
   ];
 
   return (
-    <aside className="w-[208px] bg-navy-sidebar text-navy-text flex flex-col justify-between shrink-0 select-none h-screen sticky top-0 border-r border-slate-800 z-20">
+    <aside className="hidden md:flex w-[208px] bg-navy-sidebar text-navy-text flex-col justify-between shrink-0 select-none h-screen sticky top-0 border-r border-slate-800 z-20">
       {/* Top Section */}
       <div className="flex flex-col min-h-0">
         {/* Brand Area */}
@@ -65,23 +56,20 @@ export const Sidebar = ({ onOpenNewProjectModal }) => {
 
         {/* Section Label */}
         <div className="px-4 pt-1 pb-1.5 text-micro text-navy-label uppercase tracking-widest font-semibold">
-          Platform Navigation
+          Your workspace
         </div>
 
         {/* Nav Items List */}
         <nav className="px-2 space-y-0.5 overflow-y-auto max-h-[calc(100vh-220px)]">
-          {navItems.map((item, idx) => {
+          {navItems.map((item) => {
             const Icon = item.icon;
-            const isActive = location.pathname === item.path && (
-              idx !== 3 && idx !== 4 || location.pathname === '/clip-studio'
-            );
 
             return (
               <NavLink
                 key={idx}
                 to={item.path}
                 className={({ isActive: linkActive }) => {
-                  const active = linkActive && (item.name !== 'AI Potential Analyzer' && item.name !== 'AI Script Matcher' || location.pathname === '/clip-studio');
+                  const active = linkActive;
                   return `h-[32px] flex items-center justify-between px-2.5 rounded-btn text-xs font-medium transition-all relative ${
                     active
                       ? 'bg-navy-active text-white font-semibold'
@@ -90,7 +78,7 @@ export const Sidebar = ({ onOpenNewProjectModal }) => {
                 }}
               >
                 {({ isActive: linkActive }) => {
-                  const active = linkActive && (item.name !== 'AI Potential Analyzer' && item.name !== 'AI Script Matcher' || location.pathname === '/clip-studio');
+                  const active = linkActive;
                   return (
                     <>
                       {active && (
@@ -117,30 +105,36 @@ export const Sidebar = ({ onOpenNewProjectModal }) => {
       {/* Pinned Bottom Area */}
       <div className="border-t border-slate-800/80 bg-navy-sidebar p-2 space-y-1">
         {/* Workspace Switcher */}
-        <div className="p-2 rounded-btn hover:bg-navy-hover transition-colors flex items-center justify-between cursor-pointer">
+        <label className="p-2 rounded-btn hover:bg-navy-hover transition-colors flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 truncate">
             <div className="w-5 h-5 rounded-[4px] bg-navy-active text-white font-mono text-[10px] font-bold flex items-center justify-center shrink-0">
               {activeProj?.name.charAt(0) || 'W'}
             </div>
             <div className="truncate">
               <span className="text-xs font-semibold text-white block truncate">{activeProj?.name || 'Workspace'}</span>
-              <span className="text-[10px] text-navy-label block truncate">Team Plan</span>
+              <span className="text-[10px] text-navy-label block truncate">Current project</span>
             </div>
           </div>
-          <ChevronsUpDown className="w-3.5 h-3.5 text-navy-label shrink-0" />
-        </div>
+          <select
+            aria-label="Choose current project"
+            value={activeProj?.id || ''}
+            onChange={(event) => setActiveProject(event.target.value)}
+            className="max-w-20 bg-transparent text-transparent outline-none cursor-pointer"
+          >
+            {!projects.length && <option value="">No projects</option>}
+            {projects.map((project) => <option key={project.id} value={project.id} className="text-ink-primary">{project.name}</option>)}
+          </select>
+          <ChevronDown className="w-3.5 h-3.5 text-navy-label shrink-0 pointer-events-none -ml-7" />
+        </label>
 
         {/* User Info Row */}
         <div className="px-2 py-1.5 flex items-center justify-between border-t border-slate-800/60 pt-2">
           <div className="flex items-center gap-2 truncate">
             <div className="w-6 h-6 rounded-full bg-accent text-white text-[10px] font-bold flex items-center justify-center shrink-0">
-              {user.avatar || 'SD'}
+              {user.avatar || 'W'}
             </div>
-            <span className="text-xs font-medium text-white truncate">{user.name}</span>
+            <span className="text-xs font-medium text-white truncate">Local workspace</span>
           </div>
-          <NavLink to="/auth" className="text-navy-label hover:text-white p-1 rounded transition-colors" title="Sign Out">
-            <LogOut className="w-3.5 h-3.5" />
-          </NavLink>
         </div>
       </div>
     </aside>

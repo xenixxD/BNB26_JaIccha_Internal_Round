@@ -7,27 +7,16 @@ import { MetadataStrip } from '../components/ui/MetadataStrip';
 import { Panel } from '../components/ui/Panel';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
-import { StatTile } from '../components/ui/StatTile';
 import { UploadAssetModal } from '../components/common/UploadAssetModal';
 import {
   Sparkles,
   FileCheck,
   Play,
   Pause,
-  RotateCcw,
-  Volume2,
-  Maximize2,
   Scissors,
-  CheckCircle2,
-  Video,
-  Info,
   ArrowRight,
   TrendingDown,
   AlertTriangle,
-  Lightbulb,
-  Copy,
-  Check,
-  RefreshCw,
   Upload,
   Zap,
   Trash2
@@ -38,7 +27,6 @@ export const ClipStudioPage = () => {
   const videoRef = useRef(null);
   const {
     assets,
-    transcript,
     candidateMoments,
     scriptMatches,
     retentionAnalysis,
@@ -70,13 +58,11 @@ export const ClipStudioPage = () => {
   const [currentTime, setCurrentTime] = useState(0);
   const [videoSrc, setVideoSrc] = useState(null);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
-  const [filterTag, setFilterTag] = useState('All');
-  const [sortBy, setSortBy] = useState('score');
   const [selectedCandidateIds, setSelectedCandidateIds] = useState([]);
   const [activeCandidateId, setActiveCandidateId] = useState(null);
-  const [targetFormat, setTargetFormat] = useState('9:16');
-  const [copiedHookId, setCopiedHookId] = useState(null);
-  const [selectedHookIndex, setSelectedHookIndex] = useState(0);
+  const [retentionLoading, setRetentionLoading] = useState(false);
+  const [hooksLoading, setHooksLoading] = useState(false);
+  const [hooksForClipId, setHooksForClipId] = useState(null);
   const [scriptInput, setScriptInput] = useState('');
   const [scriptTitle, setScriptTitle] = useState('Script');
   const [scriptLibrary, setScriptLibrary] = useState([]);
@@ -86,6 +72,7 @@ export const ClipStudioPage = () => {
   const [creatingClipForMatch, setCreatingClipForMatch] = useState(null);
   const [scriptMatchError, setScriptMatchError] = useState('');
   const [deletingProject, setDeletingProject] = useState(false);
+  const [creatingClips, setCreatingClips] = useState(false);
   const [projectActionError, setProjectActionError] = useState('');
 
   const videoAssets = assets.filter((a) =>
@@ -93,7 +80,8 @@ export const ClipStudioPage = () => {
     (a.projectId || a.project_id) === activeProjectId
   );
   const activeAsset = videoAssets.find((a) => a.id === selectedAssetId) || videoAssets[0];
-  const activeClip = clips.find((c) => c.id === activeClipId) || clips[0];
+  const projectClips = clips.filter((clip) => clip.projectId === activeProjectId);
+  const activeClip = projectClips.find((clip) => clip.id === activeClipId) || projectClips[0];
 
   useEffect(() => {
     setVideoSrc(activeAsset?.url || null);
@@ -139,18 +127,41 @@ export const ClipStudioPage = () => {
     }
     if (selectedAssetId) {
       if (!candidateMoments.some((candidate) => candidate.assetId === selectedAssetId)) {
-        runPotentialAnalyzer(selectedAssetId);
+        setAnalyzing(true);
+        runPotentialAnalyzer(selectedAssetId)
+          .catch((error) => setAnalysisError(readableError(error, 'Could not analyze this footage. Try again.')))
+          .finally(() => setAnalyzing(false));
       }
     }
   }, [selectedAssetId, candidateMoments]);
 
-  useEffect(() => {
-    if (selectedAssetId && activeTab === 'retention' && !retentionAnalysis) {
-      runRetentionAnalyzer(selectedAssetId);
-    } else if (selectedAssetId && activeTab === 'hooklab' && abHookVariations.length === 0 && activeClip) {
-      runAbHookGenerator(activeClip.id, activeClip.caption || '');
+  const handleRetentionAnalysis = async () => {
+    if (!selectedAssetId || retentionLoading) return;
+    setRetentionLoading(true);
+    setAnalysisError(null);
+    try {
+      await runRetentionAnalyzer(selectedAssetId);
+    } catch (error) {
+      setAnalysisError(readableError(error, 'Could not estimate pacing. Try again.'));
+    } finally {
+      setRetentionLoading(false);
     }
-  }, [activeTab, selectedAssetId]);
+  };
+
+  const handleGenerateHooks = async () => {
+    if (!activeClip || hooksLoading) return;
+    setHooksLoading(true);
+    setHooksForClipId(null);
+    setAnalysisError(null);
+    try {
+      await runAbHookGenerator(activeClip.id, activeClip.caption || activeClip.suggestedHook || '');
+      setHooksForClipId(activeClip.id);
+    } catch (error) {
+      setAnalysisError(readableError(error, 'Could not generate hook ideas. Try again.'));
+    } finally {
+      setHooksLoading(false);
+    }
+  };
 
   const assetCandidates = candidateMoments.filter(
     (candidate) => !candidate.assetId || candidate.assetId === activeAsset?.id
@@ -166,7 +177,7 @@ export const ClipStudioPage = () => {
     try {
       await runPotentialAnalyzer(selectedAssetId);
     } catch (err) {
-      setAnalysisError("AI Potential Analysis failed for uploaded video. Check API key configuration.");
+      setAnalysisError(readableError(err, 'Could not analyze this footage. Check the server and try again.'));
     } finally {
       setAnalyzing(false);
     }
@@ -225,20 +236,17 @@ export const ClipStudioPage = () => {
     }
   };
 
-  const handleAutoSelectTopN = (n = 2) => {
-    const sorted = [...moments].sort((a, b) => b.potential_score - a.potential_score);
-    const topIds = sorted.slice(0, n).map((m) => m.id);
-    setSelectedCandidateIds(topIds);
-  };
-
   const handleBatchGenerate = async () => {
     const selected = moments.filter((m) => selectedCandidateIds.includes(m.id));
-    if (selected.length > 0) {
+    if (selected.length > 0 && !creatingClips) {
+      setCreatingClips(true);
       try {
-        await generateClip(selected[0]);
+        for (const candidate of selected) await generateClip(candidate);
         navigate('/video-editor');
       } catch (err) {
         setAnalysisError(err.message || 'Could not save the generated clip.');
+      } finally {
+        setCreatingClips(false);
       }
     }
   };
@@ -264,12 +272,7 @@ export const ClipStudioPage = () => {
     }
   };
 
-  const filteredMoments = moments.filter((m) => {
-    if (filterTag === 'All') return true;
-    if (filterTag === 'High Potential') return m.potential_score >= 85;
-    if (filterTag === 'Moderate') return m.potential_score < 85;
-    return true;
-  });
+  const filteredMoments = moments;
 
   const totalSelectedDuration = moments
     .filter((m) => selectedCandidateIds.includes(m.id))
@@ -279,12 +282,12 @@ export const ClipStudioPage = () => {
     <div className="space-y-4 max-w-[1600px] mx-auto pb-20">
       {/* Page Header */}
       <PageHeader
-        title="AI Content Intelligence Studio"
+        title="Find useful moments"
         metaChip={`Active Source: ${activeAsset?.filename || 'Video'}`}
         breadcrumbs={[
           { label: 'CreatorAI', path: '/' },
           { label: 'Workspaces', path: '/projects' },
-          { label: 'AI Content Intelligence' }
+          { label: 'Find moments' }
         ]}
         actions={
           <div className="flex flex-wrap items-center gap-2">
@@ -308,11 +311,11 @@ export const ClipStudioPage = () => {
             </select>
 
             <Button variant="secondary" onClick={handleRunAnalyzer} isLoading={analyzing} icon={Sparkles} disabled={!activeAsset}>
-              Analyze Selected Video
+              Find moments in this video
             </Button>
 
             <Button variant="primary" onClick={() => navigate('/video-editor')} icon={Scissors}>
-              Open Video Editor
+              Open drafts
             </Button>
 
             <Button
@@ -329,12 +332,10 @@ export const ClipStudioPage = () => {
       >
         <MetadataStrip
           items={[
-            { label: 'SOURCE TYPE', value: activeAsset ? 'User Uploaded Video' : 'No video selected', mono: true },
-            { label: 'AI ENGINE', value: 'Gemini 1.5 Pro Content Intelligence', mono: true },
-            { label: 'DURATION', value: activeAsset?.duration ? `${activeAsset.duration}s` : '—', mono: true },
-            { label: 'RETENTION SCORE', value: retentionAnalysis ? `${retentionAnalysis.overall_retention_score}%` : '—', mono: true }
+            { label: 'SOURCE FOOTAGE', value: activeAsset?.filename || 'No video selected' },
+            { label: 'DURATION', value: activeAsset?.duration ? `${activeAsset.duration}s` : 'Not available', mono: true }
           ]}
-          syncStatus="VIDEO SOURCE ACTIVE"
+          syncStatus={activeAsset ? 'SOURCE READY' : 'ADD FOOTAGE'}
         />
       </PageHeader>
 
@@ -362,7 +363,7 @@ export const ClipStudioPage = () => {
           }`}
         >
           <Sparkles className="w-3.5 h-3.5" />
-          <span>AI Potential Analyzer</span>
+          <span>Find moments</span>
         </button>
 
         <button
@@ -372,7 +373,7 @@ export const ClipStudioPage = () => {
           }`}
         >
           <TrendingDown className="w-3.5 h-3.5" />
-          <span>AI Retention Analyzer</span>
+          <span>Review pacing</span>
         </button>
 
         <button
@@ -382,7 +383,7 @@ export const ClipStudioPage = () => {
           }`}
         >
           <Zap className="w-3.5 h-3.5 text-accent" />
-          <span>AI A/B Hook Lab</span>
+          <span>Try openings</span>
         </button>
 
         <button
@@ -392,7 +393,7 @@ export const ClipStudioPage = () => {
           }`}
         >
           <FileCheck className="w-3.5 h-3.5" />
-          <span>AI Script Matcher</span>
+          <span>Match a script</span>
         </button>
       </div>
 
@@ -465,12 +466,7 @@ export const ClipStudioPage = () => {
 
             {activeMoment && (
               <Panel
-                title={
-                  <div className="flex items-center gap-2">
-                    <span className="text-micro text-ink-muted uppercase tracking-widest">ACTIVE MOMENT DETAILS</span>
-                    <Badge variant="accent">MATCH CONFIDENCE: 96.4%</Badge>
-                  </div>
-                }
+                title="Selected suggestion"
               >
                 <div className="space-y-3">
                   <div className="flex items-start justify-between gap-3">
@@ -480,26 +476,15 @@ export const ClipStudioPage = () => {
                         Interval: {activeMoment.start_time}s – {activeMoment.end_time}s • Duration: {activeMoment.duration}s
                       </div>
                     </div>
-                    <Badge variant="score">{activeMoment.potentialScore || activeMoment.potential_score}% VIRALITY</Badge>
+                    {(activeMoment.potentialScore ?? activeMoment.potential_score) != null && <Badge variant="score">{activeMoment.potentialScore ?? activeMoment.potential_score}% potential</Badge>}
                   </div>
 
-                  <p className="text-body text-ink-secondary leading-relaxed">
-                    AI detected high audience engagement potential driven by a curiosity statement in the opening 3 seconds and optimal short-form pacing (~145 WPM).
-                  </p>
-
                   <div className="bg-surface-inset p-3.5 rounded-panel border border-border-subtle space-y-3">
-                    <span className="text-micro text-ink-muted uppercase tracking-widest block font-semibold">
-                      AI VIRALITY & RETENTION BREAKDOWN
-                    </span>
+                    <span className="text-micro text-ink-muted uppercase tracking-widest block font-semibold">From your footage</span>
                     <p className="text-body-sm text-ink-secondary italic">
-                      "{activeMoment.transcript_excerpt}"
+                      {activeMoment.transcript_excerpt || activeMoment.transcript_text || 'No transcript excerpt was returned for this suggestion.'}
                     </p>
-
-                    <div className="grid grid-cols-3 gap-2 pt-1">
-                      <StatTile label="HOOK STRENGTH" value={`${activeMoment.hookScore || 96}%`} accent />
-                      <StatTile label="PACING DENSITY" value={`${activeMoment.pacingScore || 92}%`} />
-                      <StatTile label="SHAREABILITY" value={`${activeMoment.shareScore || 95}%`} />
-                    </div>
+                    {activeMoment.reasons?.length > 0 && <ul className="list-disc space-y-1 pl-5 text-xs text-ink-secondary">{activeMoment.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>}
                   </div>
                 </div>
               </Panel>
@@ -507,7 +492,8 @@ export const ClipStudioPage = () => {
           </div>
 
           <div className="lg:col-span-5 space-y-4">
-            <Panel title={`Detected Candidate Moments (${filteredMoments.length})`} bodyClassName="p-3 space-y-3 max-h-[720px] overflow-y-auto">
+            <Panel title={`Clip suggestions (${filteredMoments.length})`} bodyClassName="p-3 space-y-3 max-h-[720px] overflow-y-auto">
+              {filteredMoments.length === 0 && <p className="py-6 text-center text-sm text-ink-muted">{analyzing ? 'Listening to your footage and finding useful moments…' : 'No suggestions yet. Run analysis after adding a video with clear speech.'}</p>}
               {filteredMoments.map((cand) => {
                 const isChecked = selectedCandidateIds.includes(cand.id);
                 const isActive = activeCandidateId === cand.id;
@@ -536,7 +522,7 @@ export const ClipStudioPage = () => {
                           {isHigh ? 'High Potential' : 'Moderate'}
                         </Badge>
                       </div>
-                      <Badge variant="score">{cand.potential_score || cand.potentialScore}%</Badge>
+                      {(cand.potential_score ?? cand.potentialScore) != null && <Badge variant="score">{cand.potential_score ?? cand.potentialScore}%</Badge>}
                     </div>
 
                     <h4 className="font-bold text-ink-primary text-body">{cand.title}</h4>
@@ -551,11 +537,42 @@ export const ClipStudioPage = () => {
         </div>
       )}
 
+      {activeTab === 'retention' && (
+        <Panel title="Pacing review" subtitle="This is a content-based estimate from the transcript, not real audience or platform analytics.">
+          {retentionAnalysis?.asset_id === activeAsset?.id ? (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-end gap-3">
+                <div><p className="text-xs text-ink-muted">Estimated pacing score</p><p className="text-3xl font-semibold text-ink-primary">{retentionAnalysis.overall_retention_score}%</p></div>
+                <div className="pb-1"><p className="text-sm font-medium text-ink-primary">{retentionAnalysis.opening_effectiveness}</p><p className="text-xs text-ink-muted">Approx. {retentionAnalysis.pacing_wpm} words per minute</p></div>
+              </div>
+              {retentionAnalysis.weak_sections?.length > 0 && <div className="space-y-2"><h3 className="text-sm font-semibold text-ink-primary">Moments to review</h3>{retentionAnalysis.weak_sections.map((section) => <article key={section.id} className="rounded-btn border border-border-subtle bg-surface-inset p-3"><p className="text-sm font-medium text-ink-primary">{section.issue_type} · {section.start_time}s–{section.end_time}s</p><p className="mt-1 text-xs text-ink-secondary">{section.suggestion}</p></article>)}</div>}
+              {retentionAnalysis.actionable_recommendations?.length > 0 && <div><h3 className="text-sm font-semibold text-ink-primary">Suggestions</h3><ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-ink-secondary">{retentionAnalysis.actionable_recommendations.map((item) => <li key={item}>{item}</li>)}</ul></div>}
+            </div>
+          ) : (
+            <div className="py-4"><p className="text-sm text-ink-muted">Choose a video and run a pacing review to see transcript-based suggestions.</p><Button className="mt-3" variant="primary" onClick={handleRetentionAnalysis} isLoading={retentionLoading} disabled={!activeAsset}>Review pacing</Button></div>
+          )}
+        </Panel>
+      )}
+
+      {activeTab === 'hooklab' && (
+        <Panel title="Opening hook ideas" subtitle="Try a few different ways to begin your clip. Suggestions are drafts for you to edit.">
+          {!activeClip ? (
+            <div className="py-4"><p className="text-sm text-ink-muted">Create a draft from a suggestion first. Then you can generate alternate opening lines.</p><Button className="mt-3" variant="secondary" onClick={() => setActiveTab('analyzer')}>Find a clip suggestion</Button></div>
+          ) : (
+            <>
+              <p className="mb-3 text-xs text-ink-muted">For: {activeClip.title}</p>
+              <Button variant="primary" onClick={handleGenerateHooks} isLoading={hooksLoading}>Generate opening ideas</Button>
+              {hooksForClipId === activeClip.id && abHookVariations.length > 0 && <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">{abHookVariations.map((variation) => <article key={variation.id} className="rounded-panel border border-border-subtle bg-white p-4"><p className="text-xs font-semibold text-accent">{variation.style}</p><p className="mt-2 text-sm font-medium text-ink-primary">{variation.hook_text}</p>{variation.suggested_caption && <p className="mt-2 text-xs text-ink-muted">{variation.suggested_caption}</p>}<Button className="mt-3" size="sm" variant="secondary" onClick={() => applySelectedHook(activeClip.id, variation.hook_text, variation.suggested_caption)}>Use this opening</Button></article>)}</div>}
+            </>
+          )}
+        </Panel>
+      )}
+
       {activeTab === 'matcher' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <Panel title="Match your script to footage" className="space-y-4">
             <p className="text-body-sm text-ink-secondary">
-              Compares script sections to timestamped transcript windows using a local embedding model.
+              Paste a script and CreatorAI will find the closest spoken moments in your video.
               Transcripts and immutable script versions are saved with the project.
             </p>
             <label className="block space-y-1 text-body-sm font-medium text-ink-primary">
@@ -635,7 +652,7 @@ export const ClipStudioPage = () => {
           <Panel title={`Footage matches (${scriptMatches.filter((match) => match.assetId === selectedAssetId).length})`} className="space-y-3">
             {scriptMatches.filter((match) => match.assetId === selectedAssetId).length === 0 ? (
               <p className="text-body-sm text-ink-muted">
-                No matches yet. Matches appear when transcript windows meet the semantic similarity threshold.
+                No close script sections found yet. Try another script or select different footage.
               </p>
             ) : scriptMatches
                 .filter((match) => match.assetId === selectedAssetId)
@@ -649,14 +666,7 @@ export const ClipStudioPage = () => {
                     </div>
                     <p className="text-body-sm text-ink-secondary">{match.matched_transcript_excerpt}</p>
                     <p className="text-xs text-ink-muted">{match.explanation}</p>
-                    <p className="text-[10px] text-ink-muted">
-                      Semantic: {match.semantic_score.toFixed(1)}% ·
-                      Completeness: {match.completeness_score.toFixed(1)}% ·
-                      Duration: {match.duration_score.toFixed(1)}%
-                    </p>
-                    <p className="text-[10px] text-ink-muted">
-                      Script version: {match.scriptVersionId} · Transcript: {match.transcriptId}
-                    </p>
+                    <p className="text-[10px] text-ink-muted">Match score: {match.confidence_score.toFixed(1)}%</p>
                     <Button
                       variant="secondary"
                       size="sm"
@@ -674,16 +684,16 @@ export const ClipStudioPage = () => {
       )}
 
       {/* STICKY BOTTOM ACTION BAR */}
-      <div className="fixed bottom-0 left-[208px] right-0 h-[52px] bg-white border-t border-border-subtle px-6 flex items-center justify-between z-30 shadow-md">
-        <div className="flex items-center gap-4 text-xs font-medium text-ink-secondary">
+      <div className="fixed bottom-0 left-0 md:left-[208px] right-0 min-h-[52px] bg-white border-t border-border-subtle px-3 sm:px-6 py-2 flex flex-wrap items-center justify-between gap-2 z-30 shadow-md">
+        <div className="flex items-center gap-2 sm:gap-4 text-xs font-medium text-ink-secondary">
           <span>Selected Clips: <strong className="text-ink-primary font-mono font-bold">{selectedCandidateIds.length}</strong></span>
           <span>•</span>
           <span>Total Duration: <strong className="text-ink-primary font-mono font-bold">{totalSelectedDuration.toFixed(1)}s</strong></span>
         </div>
 
         <div className="flex items-center gap-3">
-          <Button variant="primary" onClick={handleBatchGenerate} icon={ArrowRight} disabled={!activeAsset || selectedCandidateIds.length === 0}>
-            Generate & Open in Video Editor
+          <Button variant="primary" onClick={handleBatchGenerate} icon={ArrowRight} isLoading={creatingClips} disabled={!activeAsset || selectedCandidateIds.length === 0}>
+            Create {selectedCandidateIds.length || ''} draft{selectedCandidateIds.length === 1 ? '' : 's'}
           </Button>
         </div>
       </div>
@@ -696,3 +706,10 @@ export const ClipStudioPage = () => {
     </div>
   );
 };
+
+function readableError(error, fallback) {
+  const detail = error.response?.data?.detail;
+  if (typeof detail === 'string') return detail;
+  if (detail?.message) return detail.message;
+  return error.message || fallback;
+}

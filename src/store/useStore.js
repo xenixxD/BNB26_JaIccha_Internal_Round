@@ -16,11 +16,11 @@ export const useStore = create((set, get) => ({
       },
 
       user: {
-        isAuthenticated: true,
-        name: 'Sohan Das',
-        email: 'sohan@creatorai.io',
-        role: 'Pro Creator',
-        avatar: 'SD'
+        isAuthenticated: false,
+        name: 'Local workspace',
+        email: '',
+        role: 'On this device',
+        avatar: 'W'
       },
 
       activeProjectId: null,
@@ -46,21 +46,28 @@ export const useStore = create((set, get) => ({
       hydrateWorkspace: async () => {
         try {
           const workspace = await api.getWorkspace();
+          // Older frontend versions wrote a high-scoring draft when a source video
+          // was uploaded. Keep those rows in storage, but don't present them as real clips.
+          const visibleClips = workspace.clips.filter((clip) => !isUploadPlaceholderClip(clip));
+          const visibleProjects = workspace.projects.map((project) => ({
+            ...project,
+            clipsCount: visibleClips.filter((clip) => clip.projectId === project.id).length
+          }));
           const activeProjectId = workspace.projects.some((project) => project.id === get().activeProjectId)
             ? get().activeProjectId
-            : workspace.projects[0]?.id || null;
-          const activeClipId = workspace.clips.some((clip) => clip.id === get().activeClipId)
+            : visibleProjects[0]?.id || null;
+          const activeClipId = visibleClips.some((clip) => clip.id === get().activeClipId && clip.projectId === activeProjectId)
             ? get().activeClipId
-            : workspace.clips[0]?.id || null;
+            : visibleClips.find((clip) => clip.projectId === activeProjectId)?.id || null;
           const savedState = activeProjectId ? await api.getProjectState(activeProjectId) : {};
           set({
-            projects: workspace.projects,
+            projects: visibleProjects,
             assets: workspace.assets,
-            clips: workspace.clips,
+            clips: visibleClips,
             activeProjectId,
             activeClipId,
             transcript: savedState.transcript?.data || [],
-            candidateMoments: savedState.candidateMoments?.data || [],
+            candidateMoments: (savedState.candidateMoments?.data || []).filter((candidate) => !isUploadFallbackCandidate(candidate)),
             scriptMatches: savedState.scriptMatches?.data || [],
             retentionAnalysis: savedState.retentionAnalysis?.data || null,
             abHookVariations: savedState.abHookVariations?.data || [],
@@ -85,7 +92,7 @@ export const useStore = create((set, get) => ({
           const savedState = await api.getProjectState(projectId);
           set({
             transcript: savedState.transcript?.data || [],
-            candidateMoments: savedState.candidateMoments?.data || [],
+            candidateMoments: (savedState.candidateMoments?.data || []).filter((candidate) => !isUploadFallbackCandidate(candidate)),
             scriptMatches: savedState.scriptMatches?.data || [],
             retentionAnalysis: savedState.retentionAnalysis?.data || null,
             abHookVariations: savedState.abHookVariations?.data || [],
@@ -114,8 +121,10 @@ export const useStore = create((set, get) => ({
       },
 
       setActiveProject: (id) => {
-        set({ activeProjectId: id });
-        get().loadProjectState(id);
+        const nextClipId = get().clips.find((clip) => clip.projectId === id)?.id || null;
+        set({ activeProjectId: id, activeClipId: nextClipId });
+        if (id) get().loadProjectState(id);
+        else set({ transcript: [], candidateMoments: [], scriptMatches: [], retentionAnalysis: null, abHookVariations: [], outputs: [] });
       },
       setActiveClip: (id) => set({ activeClipId: id }),
 
@@ -125,6 +134,7 @@ export const useStore = create((set, get) => ({
           set((state) => ({
             projects: [newProject, ...state.projects.filter((project) => project.id !== newProject.id)],
             activeProjectId: newProject.id,
+            activeClipId: null,
             transcript: [],
             candidateMoments: [],
             scriptMatches: [],
@@ -229,36 +239,6 @@ export const useStore = create((set, get) => ({
             workspaceError: null
           }));
 
-          if (fileType === 'video') {
-            const cleanName = newAsset.filename.replace(/\.[^/.]+$/, '');
-            const clip = await api.createClip({
-              projectId: newAsset.projectId,
-              assetId: newAsset.id,
-              title: `Clip: ${cleanName}`,
-              startTime: 0,
-              endTime: Math.min(30, newAsset.duration || 30),
-              aspectRatio: '9:16',
-              potentialScore: 94,
-              ratingLabel: 'High Potential',
-              suggestedHook: `Key takeaway from ${cleanName}...`,
-              hooks: [`Key takeaway from ${cleanName}`, 'Watch this workflow strategy...'],
-              selectedHookIndex: 0,
-              caption: `Uploaded footage segment: "${newAsset.filename}"`,
-              hashtags: ['#CreatorAI', '#Shorts', '#Reels'],
-              subtitles: [],
-              status: 'Draft',
-              platform: 'Instagram Reels'
-            });
-            set((state) => ({
-              clips: [clip, ...state.clips.filter((item) => item.id !== clip.id)],
-              activeClipId: clip.id,
-              projects: state.projects.map((project) =>
-                project.id === clip.projectId
-                  ? { ...project, clipsCount: (project.clipsCount || 0) + 1 }
-                  : project
-              )
-            }));
-          }
           return newAsset;
         } catch (error) {
           set({ workspaceError: `Could not persist asset: ${error.message}` });
@@ -336,97 +316,11 @@ export const useStore = create((set, get) => ({
       },
 
       runPotentialAnalyzer: async (assetId) => {
-        const cached = get().candidateMoments.filter((candidate) => candidate.assetId === assetId);
-        if (cached.length) return cached;
-        const targetAsset = get().assets.find((a) => a.id === assetId);
         const response = await api.analyzePotential(assetId, get().aiProvider);
-        if (response && response.candidates && response.candidates.length > 0) {
-          const candidates = response.candidates.map((candidate) => ({
-            ...candidate,
-            assetId: candidate.assetId || assetId
-          }));
-          const allCandidates = [
-            ...get().candidateMoments.filter((candidate) => candidate.assetId !== assetId),
-            ...candidates
-          ];
-          set({ candidateMoments: allCandidates });
-          await get().persistProjectState('candidateMoments', allCandidates);
-          return candidates;
-        }
-
-        // Dynamic candidate generator tailored specifically to targetAsset
-        const isUserUpload = targetAsset && targetAsset.isDemo === false;
-        const dur = targetAsset?.duration || 160.0;
-        const filename = targetAsset?.filename || "Uploaded Footage";
-
-        const candidates = isUserUpload ? [
-          {
-            id: `cand_user_1_${assetId}`,
-            assetId: assetId,
-            title: `Key Highlight: ${filename.replace(/\.[^/.]+$/, "")} (Opening)`,
-            start_time: round(Math.min(2.0, dur * 0.05), 1),
-            end_time: round(Math.min(28.0, dur * 0.35), 1),
-            duration: round(Math.min(26.0, dur * 0.3), 1),
-            transcript_excerpt: `Opening segment of uploaded video: "${filename}". High viewer curiosity detected in initial seconds.`,
-            potential_score: 92.4,
-            rating_label: "High Potential",
-            suggested_hook: `Here is the key breakdown from ${filename.replace(/\.[^/.]+$/, "")}...`,
-            reasons: ["Strong audio energy in opening", "Optimal pacing cadence (~142 WPM)", "Clear subject introduction"],
-            hookScore: 94,
-            pacingScore: 90,
-            shareScore: 93
-          },
-          {
-            id: `cand_user_2_${assetId}`,
-            assetId: assetId,
-            title: `Core Takeaway Peak from ${filename.replace(/\.[^/.]+$/, "")}`,
-            start_time: round(Math.min(30.0, dur * 0.4), 1),
-            end_time: round(Math.min(65.0, dur * 0.8), 1),
-            duration: round(Math.min(35.0, dur * 0.4), 1),
-            transcript_excerpt: `Core takeaway segment from uploaded footage "${filename}". High retention density window.`,
-            potential_score: 86.8,
-            rating_label: "High Potential",
-            suggested_hook: `The main takeaway you need to know from this footage...`,
-            reasons: ["High information density", "Self-contained narrative resolution", "Ideal duration for Shorts/Reels"],
-            hookScore: 88,
-            pacingScore: 85,
-            shareScore: 87
-          }
-        ] : [
-          {
-            id: 'cand_1',
-            assetId: assetId,
-            title: 'The #1 AI Creator Mistake',
-            start_time: 12.5,
-            end_time: 35.0,
-            duration: 22.5,
-            transcript_excerpt: 'Most creators make one huge mistake when starting with AI tools: they treat AI as a replacement rather than an operating copilot.',
-            potential_score: 94.5,
-            rating_label: 'High Potential',
-            suggested_hook: 'Most creators make one huge mistake when starting with AI...',
-            reasons: ['Strong curiosity hook in opening statement', 'Optimal short-form pacing (~145 WPM)', 'Self-contained narrative window (22.5s)'],
-            hookScore: 96,
-            pacingScore: 92,
-            shareScore: 95
-          },
-          {
-            id: 'cand_2',
-            assetId: assetId,
-            title: '3-Second Hook Retention Secret',
-            start_time: 95.0,
-            end_time: 128.0,
-            duration: 33.0,
-            transcript_excerpt: 'If you master hook generation in the first 3 seconds, your retention rate will skyrocket across TikTok and Instagram.',
-            potential_score: 89.2,
-            rating_label: 'High Potential',
-            suggested_hook: 'If you master hook generation in the first 3 seconds...',
-            reasons: ['Direct takeaway resolution', 'High audience retention topic', 'Optimal duration for Reels/Shorts (33s)'],
-            hookScore: 90,
-            pacingScore: 88,
-            shareScore: 89
-          }
-        ];
-
+        const candidates = (response?.candidates || []).map((candidate) => ({
+          ...candidate,
+          assetId: candidate.assetId || assetId
+        }));
         const allCandidates = [
           ...get().candidateMoments.filter((candidate) => candidate.assetId !== assetId),
           ...candidates
@@ -437,108 +331,18 @@ export const useStore = create((set, get) => ({
       },
 
       runRetentionAnalyzer: async (assetId) => {
-        const targetAsset = get().assets.find((a) => a.id === assetId);
         const response = await api.analyzeRetention(assetId, get().aiProvider);
-        if (response) {
-          set({ retentionAnalysis: response });
-          await get().persistProjectState('retentionAnalysis', response);
-          return response;
-        }
-
-        const dur = targetAsset?.duration || 160.0;
-        const filename = targetAsset?.filename || "Uploaded Video";
-        const isUserUpload = targetAsset && targetAsset.isDemo === false;
-
-        const fallback = {
-          asset_id: assetId,
-          overall_retention_score: isUserUpload ? 91.2 : 88.5,
-          opening_effectiveness: isUserUpload ? "Strong Opening Audio (User Footage)" : "Needs Punchier Opener (Greeting Detected)",
-          pacing_wpm: 142.0,
-          weak_sections: isUserUpload ? [
-            {
-              id: `weak_user_1_${assetId}`,
-              start_time: 0.0,
-              end_time: round(Math.min(4.0, dur * 0.1), 1),
-              risk_level: "Minor Pacing Issue",
-              issue_type: "Introductory Silence",
-              description: `Initial silence pause before speech begins in ${filename}.`,
-              suggestion: "Trim first 2 seconds to start immediately on first spoken word."
-            },
-            {
-              id: `weak_user_2_${assetId}`,
-              start_time: round(dur * 0.5, 1),
-              end_time: round(Math.min(dur * 0.55, dur * 0.5 + 5), 1),
-              risk_level: "Moderate Risk",
-              issue_type: "Speech Pause",
-              description: "Mid-video pause gap detected.",
-              suggestion: "Tighten timeline trim to keep WPM cadence at 142 WPM."
-            }
-          ] : [
-            {
-              id: "weak_1",
-              start_time: 0.0,
-              end_time: 12.5,
-              risk_level: "Moderate Risk",
-              issue_type: "Weak Opening Hook",
-              description: "Introductory welcome greeting ('Welcome everyone...') creates slow curiosity momentum.",
-              suggestion: "Trim greeting. Start directly with: 'Most creators make one huge mistake when starting with AI tools...'"
-            },
-            {
-              id: "weak_2",
-              start_time: 48.0,
-              end_time: 55.0,
-              risk_level: "Minor Pacing Issue",
-              issue_type: "Unnecessary Pause",
-              description: "7-second silence pause between script matching explanation and workflow steps.",
-              suggestion: "Tighten pause gap in timeline editor to maintain 145 WPM cadence."
-            }
-          ],
-          actionable_recommendations: [
-            `Trim introductory pause in "${filename}" to boost 3-second viewer retention.`,
-            `Add bold 9:16 subtitle overlays during main key takeaway statements.`,
-            `Format clip aspect ratio to 9:16 vertical for Instagram Reels & Shorts.`
-          ],
-          methodology_note: "Heuristic prediction based on transcript pacing, pause density, and topic boundaries (Not real platform analytics)."
-        };
-        set({ retentionAnalysis: fallback });
-        await get().persistProjectState('retentionAnalysis', fallback);
-        return fallback;
+        set({ retentionAnalysis: response });
+        await get().persistProjectState('retentionAnalysis', response);
+        return response;
       },
 
       runAbHookGenerator: async (clipId, segmentText) => {
         const response = await api.generateAbHooks(clipId, segmentText, 'curious', 'Creators & Engineers', get().aiProvider);
-        if (response && response.variations) {
-          set({ abHookVariations: response.variations });
-          await get().persistProjectState('abHookVariations', response.variations);
-          return response.variations;
-        }
-
-        const fallbackVariations = [
-          {
-            id: "hook_var_1",
-            style: "Curiosity-Driven",
-            hook_text: "🔥 The single biggest mistake 99% of creators make with AI video tools...",
-            suggested_caption: "Most creators treat AI as a replacement instead of an operating copilot. Here's why that destroys engagement 🧵👇",
-            predicted_impact: "Higher Click-Through Rate (CTR)"
-          },
-          {
-            id: "hook_var_2",
-            style: "Bold & Controversial",
-            hook_text: "🚨 Stop using basic AI video tools until you know this secret strategy!",
-            suggested_caption: "If you're still cutting vertical clips manually in 2026, you're wasting 10+ hours every week. Watch this workflow...",
-            predicted_impact: "Better 3-Second Retention"
-          },
-          {
-            id: "hook_var_3",
-            style: "Educational",
-            hook_text: "💡 Here's the exact 3-step system to turn keynotes into viral 9:16 Shorts...",
-            suggested_caption: "Step 1: Run AI Potential Analyzer. Step 2: Match transcript script. Step 3: Export vertical 9:16 clip. Save this post! 📌",
-            predicted_impact: "More Shares & Saves"
-          }
-        ];
-        set({ abHookVariations: fallbackVariations });
-        await get().persistProjectState('abHookVariations', fallbackVariations);
-        return fallbackVariations;
+        const variations = response?.variations || [];
+        set({ abHookVariations: variations });
+        await get().persistProjectState('abHookVariations', variations);
+        return variations;
       },
 
       applySelectedHook: (clipId, hookText, captionText) => {
@@ -556,7 +360,6 @@ export const useStore = create((set, get) => ({
           )
         }));
       },
-
       runScriptMatcher: async (assetId, scriptText, scriptTitle = 'Script') => {
         try {
           const response = await api.matchScript(
@@ -598,6 +401,12 @@ export const useStore = create((set, get) => ({
       generateClip: async (candidate) => {
         const startTime = candidate.start_time ?? candidate.startTime ?? 0.0;
         const endTime = candidate.end_time ?? candidate.endTime ?? startTime + 30.0;
+        let preferences = {};
+        try {
+          preferences = JSON.parse(window.localStorage.getItem('creatorai.preferences.v1') || '{}');
+        } catch {
+          preferences = {};
+        }
         const clipData = {
           projectId: get().activeProjectId,
           assetId: candidate.assetId || null,
@@ -605,24 +414,18 @@ export const useStore = create((set, get) => ({
           startTime,
           endTime,
           duration: round(endTime - startTime, 1),
-          aspectRatio: '9:16',
-          potentialScore: candidate.potential_score ?? (candidate.scriptVersionId ? 0 : 90.0),
-          ratingLabel: candidate.rating_label || (candidate.scriptVersionId ? 'Script Match' : 'High Potential'),
-          suggestedHook: candidate.suggested_hook || 'Check out this highlight!',
-          hooks: [
-            `🔥 ${candidate.suggested_hook || 'Check out this key highlight!'}`,
-            `💡 Here is the secret strategy to level up your workflow...`,
-            `🚀 Step-by-step breakdown for creators in 2026.`
-          ],
+          aspectRatio: preferences.aspectRatio || '9:16',
+          potentialScore: candidate.potential_score ?? candidate.potentialScore ?? null,
+          ratingLabel: candidate.rating_label || 'Script match',
+          suggestedHook: candidate.suggested_hook || null,
+          hooks: candidate.suggested_hook ? [candidate.suggested_hook] : [],
           selectedHookIndex: 0,
-          caption: `Key highlight: "${candidate.transcript_excerpt || 'AI workflow secret...'}"\n\nFollow for more creator insights!`,
-          hashtags: ['#CreatorAI', '#VideoEditing', '#Shorts', '#Reels'],
-          subtitles: [
-            { id: 1, start: 0.0, end: 4.0, text: candidate.suggested_hook || 'Key Highlight' }
-          ],
+          caption: candidate.transcript_excerpt || '',
+          hashtags: [],
+          subtitles: [],
           status: 'Draft',
           scheduledDate: null,
-          platform: 'Instagram Reels',
+          platform: preferences.platform || 'Instagram Reels',
           exportedUrl: null,
           metadata: candidate.scriptVersionId
             ? {
@@ -661,8 +464,12 @@ export const useStore = create((set, get) => ({
       },
 
       updateClipTimestamps: (clipId, startTime, endTime) => {
-        const start = Math.max(0, Number(startTime));
-        const end = Math.max(start + 1.0, Number(endTime));
+        const sourceDuration = get().assets.find((asset) => asset.id === get().clips.find((clip) => clip.id === clipId)?.assetId)?.duration;
+        const maxTime = Number.isFinite(Number(sourceDuration)) && Number(sourceDuration) > 1 ? Number(sourceDuration) : Number.POSITIVE_INFINITY;
+        const requestedStart = Number(startTime);
+        const start = Math.max(0, Math.min(Number.isFinite(requestedStart) ? requestedStart : 0, maxTime - 1));
+        const requestedEnd = Number(endTime);
+        const end = Math.min(maxTime, Math.max(start + 1.0, Number.isFinite(requestedEnd) ? requestedEnd : start + 1));
         const duration = round(end - start, 1);
         set((state) => ({
           clips: state.clips.map((c) =>
@@ -753,36 +560,7 @@ export const useStore = create((set, get) => ({
 
       generatePlannerCards: async (topic, niche = 'Tech & AI', days = 7) => {
         const res = await api.generatePlannerIdeas(topic, niche, days, get().aiProvider);
-        if (res && res.cards && res.cards.length > 0) {
-          const newClips = res.cards.map((card, idx) => ({
-            id: `clip_plan_${Date.now()}_${idx}`,
-            projectId: get().activeProjectId,
-            assetId: null,
-            title: card.title,
-            startTime: 0.0,
-            endTime: 30.0,
-            duration: 30.0,
-            aspectRatio: '9:16',
-            potentialScore: card.estimated_viral_score || 92.0,
-            ratingLabel: 'High Potential',
-            suggestedHook: card.hook,
-            hooks: [card.hook],
-            selectedHookIndex: 0,
-            caption: `${card.caption}\n\nTarget Audience: ${card.target_audience}`,
-            hashtags: card.hashtags || ['#CreatorAI', '#ViralContent'],
-            subtitles: [{ id: 1, start: 0.0, end: 4.0, text: card.hook }],
-            status: 'Scheduled',
-            scheduledDate: card.suggested_date,
-            platform: card.platform || 'Instagram Reels',
-            exportedUrl: null
-          }));
-
-          set((state) => ({
-            clips: [...newClips, ...state.clips]
-          }));
-          return newClips;
-        }
-        return [];
+        return res?.items || res?.cards || [];
       },
 
       exportClip: async (clipId) => {
@@ -817,4 +595,14 @@ export const useStore = create((set, get) => ({
 
 function round(val, decimals) {
   return Number(Math.round(val + 'e' + decimals) + 'e-' + decimals);
+}
+
+function isUploadPlaceholderClip(clip) {
+  return clip.title?.startsWith('Clip: ') &&
+    clip.caption?.startsWith('Uploaded footage segment:') &&
+    Number(clip.potentialScore) === 94;
+}
+
+function isUploadFallbackCandidate(candidate) {
+  return candidate.id === 'cand_1' || candidate.id === 'cand_2' || candidate.id?.startsWith('cand_user_');
 }

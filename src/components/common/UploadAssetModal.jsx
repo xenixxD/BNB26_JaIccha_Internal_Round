@@ -3,8 +3,7 @@ import { useDropzone } from 'react-dropzone';
 import { useStore } from '../../store/useStore';
 import { api } from '../../services/api';
 import { Button } from '../ui/Button';
-import { Badge } from '../ui/Badge';
-import { X, UploadCloud, FileVideo, FileText, Music, Image as ImageIcon, Loader2, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { X, UploadCloud, FileVideo, FileText, Music, Loader2, CheckCircle2, AlertTriangle } from 'lucide-react';
 
 export const UploadAssetModal = ({ isOpen, onClose, onSuccess }) => {
   const { activeProjectId, addAsset } = useStore();
@@ -29,7 +28,7 @@ export const UploadAssetModal = ({ isOpen, onClose, onSuccess }) => {
 
     if (!acceptedFiles || acceptedFiles.length === 0) return;
     setUploading(true);
-    setProgress(10);
+    setProgress(0);
 
     try {
       for (const file of acceptedFiles) {
@@ -46,7 +45,6 @@ export const UploadAssetModal = ({ isOpen, onClose, onSuccess }) => {
         );
         assetRes.isDemo = false;
 
-        setProgress(95);
         await addAsset(assetRes, true);
         if (onSuccess) {
           onSuccess(assetRes);
@@ -74,7 +72,8 @@ export const UploadAssetModal = ({ isOpen, onClose, onSuccess }) => {
     accept: {
       'video/*': ['.mp4', '.mov', '.webm', '.mkv'],
       'audio/*': ['.mp3', '.wav', '.m4a'],
-      'image/*': ['.jpg', '.jpeg', '.png', '.webp']
+      'image/*': ['.jpg', '.jpeg', '.png', '.webp'],
+      'text/plain': ['.txt', '.script']
     }
   });
 
