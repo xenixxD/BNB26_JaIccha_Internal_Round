@@ -12,7 +12,6 @@ import {
   Monitor,
   Square,
   Sparkles,
-  Type,
   Film,
   CheckCircle2,
   AlertTriangle
@@ -36,7 +35,13 @@ export const VideoEditorPage = () => {
     saveDraft,
     loadDraftVersions,
     restoreDraftVersion,
-    draftVersions
+    draftVersions,
+    editorUnsavedChanges,
+    setEditorUnsavedChanges,
+    setEditorSavingDraft,
+    editorSavedClip,
+    setEditorSavedClip,
+    discardEditorChanges
   } = useStore();
 
   const projectClips = clips.filter((clip) => clip.projectId === activeProjectId);
@@ -47,26 +52,65 @@ export const VideoEditorPage = () => {
   const [currentTime, setCurrentTime] = useState(0);
   const [videoSrc, setVideoSrc] = useState(null);
   const [selectedPlatform, setSelectedPlatform] = useState('instagram_reels');
+  const [previewError, setPreviewError] = useState('');
   const [exporting, setExporting] = useState(false);
   const [exportResult, setExportResult] = useState(null);
   const [savingDraft, setSavingDraft] = useState(false);
   const [draftSaved, setDraftSaved] = useState(false);
   const [draftError, setDraftError] = useState('');
+  const [draftHistoryLoading, setDraftHistoryLoading] = useState(false);
+  const [draftHistoryError, setDraftHistoryError] = useState('');
+  const [statusError, setStatusError] = useState('');
+  const [savingStatus, setSavingStatus] = useState(false);
   const [exportError, setExportError] = useState('');
   const [generatingContent, setGeneratingContent] = useState(false);
   const [contentError, setContentError] = useState('');
+  const currentClipSnapshot = currentClip ? getDraftSnapshot(currentClip) : null;
+  const savedClipSnapshot = editorSavedClip ? getDraftSnapshot(editorSavedClip) : null;
+
+  useEffect(() => {
+    if (!currentClip) return;
+    if (!editorSavedClip || editorSavedClip.id !== currentClip.id) {
+      setEditorSavedClip(currentClip);
+      setEditorUnsavedChanges(false);
+      return;
+    }
+    setEditorUnsavedChanges(savedClipSnapshot !== currentClipSnapshot);
+  }, [currentClip?.id, currentClipSnapshot, editorSavedClip?.id, savedClipSnapshot, setEditorSavedClip, setEditorUnsavedChanges]);
 
   useEffect(() => {
     setVideoSrc(currentAsset?.url || null);
+    setPreviewError('');
   }, [currentAsset?.url]);
 
   useEffect(() => {
-    if (currentClip) loadDraftVersions(currentClip.id);
+    if (!currentClip) return undefined;
+    let cancelled = false;
+    setDraftHistoryLoading(true);
+    setDraftHistoryError('');
+    loadDraftVersions(currentClip.id)
+      .catch((error) => {
+        if (!cancelled) setDraftHistoryError(readableError(error, 'Draft history could not be loaded.'));
+      })
+      .finally(() => {
+        if (!cancelled) setDraftHistoryLoading(false);
+      });
+    return () => { cancelled = true; };
   }, [currentClip?.id]);
+
+  const retryDraftHistory = () => {
+    if (!currentClip || draftHistoryLoading) return;
+    setDraftHistoryLoading(true);
+    setDraftHistoryError('');
+    loadDraftVersions(currentClip.id)
+      .catch((error) => setDraftHistoryError(readableError(error, 'Draft history could not be loaded.')))
+      .finally(() => setDraftHistoryLoading(false));
+  };
 
   useEffect(() => {
     if (videoRef.current && currentClip) {
       videoRef.current.currentTime = currentClip.startTime;
+      setCurrentTime(currentClip.startTime);
     }
   }, [currentClip?.id, currentClip?.startTime]);
 
@@ -78,7 +122,7 @@ export const VideoEditorPage = () => {
         try {
           await videoRef.current.play();
         } catch {
-          setExportError('This video could not be played. Check that the source file is still available.');
+          setPreviewError('This video could not be played. Check that the source file is still available.');
         }
       }
     }
@@ -116,15 +160,18 @@ export const VideoEditorPage = () => {
   const handleSaveDraft = async () => {
     if (!currentClip || savingDraft) return;
     setSavingDraft(true);
+    setEditorSavingDraft(true);
     setDraftSaved(false);
     setDraftError('');
     try {
-      await saveDraft(currentClip.id);
+      const draft = await saveDraft(currentClip.id);
+      setEditorUnsavedChanges(getDraftSnapshot(draft.payload) !== getDraftSnapshot(useStore.getState().clips.find((clip) => clip.id === currentClip.id)));
       setDraftSaved(true);
     } catch (error) {
-      setDraftError(error.message || 'Draft could not be saved.');
+      setDraftError(readableError(error, 'Draft could not be saved.'));
     } finally {
       setSavingDraft(false);
+      setEditorSavingDraft(false);
     }
   };
 
@@ -134,10 +181,25 @@ export const VideoEditorPage = () => {
     if (draft) restoreDraftVersion(draft);
   };
 
-  const handleSaveToPlanner = () => {
-    if (currentClip) {
-      moveClipStatus(currentClip.id, 'Ready for Review');
+  const handleSelectClip = (clipId) => {
+    if (savingDraft) return;
+    if (clipId === currentClip.id) return;
+    if (editorUnsavedChanges && !window.confirm('You have unsaved editor changes. Switch clips without saving them?')) return;
+    if (editorUnsavedChanges) discardEditorChanges();
+    setActiveClip(clipId);
+  };
+
+  const handleSaveToPlanner = async () => {
+    if (!currentClip || savingStatus) return;
+    setSavingStatus(true);
+    setStatusError('');
+    try {
+      await moveClipStatus(currentClip.id, 'Ready for Review');
       navigate('/planner');
+    } catch (error) {
+      setStatusError(readableError(error, 'Could not mark this clip ready. Try again.'));
+    } finally {
+      setSavingStatus(false);
     }
   };
 
@@ -167,6 +229,7 @@ export const VideoEditorPage = () => {
       <div className="min-h-[42px] bg-white border-b border-border-subtle px-3 py-2 flex flex-wrap items-center justify-between gap-2 shrink-0 z-20">
         <div className="flex items-center gap-2 overflow-x-auto max-w-full">
           <input
+            aria-label="Draft title"
             type="text"
             value={currentClip.title}
             onChange={(e) => updateClip(currentClip.id, { title: e.target.value })}
@@ -178,9 +241,9 @@ export const VideoEditorPage = () => {
           <div className="flex items-center gap-1">
           </div>
 
-          <div className="flex items-center gap-1.5 text-micro text-ink-muted font-mono font-semibold">
-            <span className="w-1.5 h-1.5 rounded-full bg-status-success inline-block"></span>
-            <span>Save changes with “Save draft”</span>
+          <div className="flex items-center gap-1.5 text-micro text-ink-muted font-semibold" role="status" aria-live="polite">
+            <span className={`w-1.5 h-1.5 rounded-full inline-block ${editorUnsavedChanges ? 'bg-amber-500' : 'bg-status-success'}`}></span>
+            <span>{savingDraft ? "Saving draft…" : editorUnsavedChanges ? "Unsaved changes" : "Draft is up to date"}</span>
           </div>
         </div>
 
@@ -190,13 +253,15 @@ export const VideoEditorPage = () => {
             aria-label="Saved draft versions"
             defaultValue=""
             onChange={handleRestoreDraft}
+            disabled={draftHistoryLoading || Boolean(draftHistoryError)}
             className="h-7 max-w-36 bg-white border border-border-subtle text-xs rounded-btn px-2"
           >
-            <option value="">Draft history</option>
+            <option value="">{draftHistoryLoading ? 'Loading drafts…' : draftHistoryError ? 'Draft history unavailable' : 'Draft history'}</option>
             {draftVersions.map((draft) => (
               <option key={draft.id} value={draft.version}>Version {draft.version}</option>
             ))}
           </select>
+          {draftHistoryError && <button type="button" className="text-xs font-semibold text-accent underline" onClick={retryDraftHistory}>Retry</button>}
           <Button variant="secondary" size="sm" onClick={handleSaveDraft} isLoading={savingDraft}>
             Save Draft
           </Button>
@@ -211,6 +276,9 @@ export const VideoEditorPage = () => {
               return (
                 <button
                   key={item.ratio}
+                  type="button"
+                  aria-label={item.label}
+                  aria-pressed={isSelected}
                   onClick={() => updateClip(currentClip.id, { aspectRatio: item.ratio })}
                   className={`h-[24px] px-2 rounded-chip text-[11px] font-semibold flex items-center gap-1 transition-colors cursor-pointer ${
                     isSelected ? 'bg-accent text-white shadow-sm' : 'text-ink-muted hover:text-ink-primary'
@@ -222,7 +290,7 @@ export const VideoEditorPage = () => {
               );
             })}
           </div>
-          <Button variant="secondary" size="sm" onClick={handleSaveToPlanner} icon={Calendar}>
+          <Button variant="secondary" size="sm" onClick={handleSaveToPlanner} isLoading={savingStatus} icon={Calendar}>
             Mark ready
           </Button>
 
@@ -236,7 +304,8 @@ export const VideoEditorPage = () => {
           {draftError}
         </div>
       )}
-      {draftSaved && <div role="status" className="px-4 py-2 bg-emerald-50 text-emerald-800 text-xs border-b border-emerald-200">A draft version was saved to this project.</div>}
+      {statusError && <div role="alert" className="px-4 py-2 bg-rose-50 text-rose-700 text-xs border-b border-rose-200">{statusError}</div>}
+      {draftSaved && !editorUnsavedChanges && <div role="status" className="px-4 py-2 bg-emerald-50 text-emerald-800 text-xs border-b border-emerald-200">A draft version was saved to this project.</div>}
       {exportError && <div role="alert" className="px-4 py-2 bg-rose-50 text-rose-700 text-xs border-b border-rose-200">{exportError}</div>}
 
       {/* 2. MAIN WORKSPACE (Left Media, Center Preview, Right Inspector) */}
@@ -248,10 +317,12 @@ export const VideoEditorPage = () => {
             {projectClips.map((clip) => {
               const isActive = clip.id === currentClip.id;
               return (
-                <div
+                <button
                   key={clip.id}
-                  onClick={() => setActiveClip(clip.id)}
-                  className={`p-2.5 rounded-panel border text-xs cursor-pointer transition-all space-y-1 ${
+                  type="button"
+                  aria-current={isActive ? 'true' : undefined}
+                  onClick={() => handleSelectClip(clip.id)}
+                  className={`w-full text-left p-2.5 rounded-panel border text-xs cursor-pointer transition-all space-y-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${
                     isActive ? 'border-accent bg-accent-soft/30 font-semibold' : 'border-border-subtle bg-white hover:border-border-strong'
                   }`}
                 >
@@ -263,7 +334,7 @@ export const VideoEditorPage = () => {
                     <span>{clip.duration}s • {clip.aspectRatio}</span>
                     <span className="text-accent">{clip.status}</span>
                   </div>
-                </div>
+                </button>
               );
             })}
           </div>
@@ -288,6 +359,7 @@ export const VideoEditorPage = () => {
                   src={videoSrc || currentAsset.url}
                   onPlay={() => setIsPlaying(true)}
                   onPause={() => setIsPlaying(false)}
+                  onError={() => setPreviewError('Preview unavailable. The source video may have moved or the format may not play in this browser.')}
                   onLoadedMetadata={(e) => {
                     if (e.target.duration && currentAsset.duration !== Math.round(e.target.duration * 10) / 10) {
                       updateAssetDuration(currentAsset.id, e.target.duration);
@@ -300,22 +372,21 @@ export const VideoEditorPage = () => {
                   className="w-full h-full object-cover"
                 />
               )}
-
-              {/* Subtitle Overlay Preview */}
-              {currentClip.subtitles?.[0]?.text && (
-                <div className="absolute bottom-6 left-2 right-2 text-center pointer-events-none">
-                  <span className="bg-black/90 text-yellow-300 text-xs font-black uppercase tracking-wider px-3 py-1.5 rounded-chip border border-yellow-500/40 shadow-xl backdrop-blur-sm inline-block max-w-[90%]">
-                    {currentClip.subtitles[0].text}
-                  </span>
+              {!currentAsset && <p className="absolute px-4 text-center text-sm text-white">Source video is unavailable for this clip.</p>}
+              {previewError && (
+                <div className="absolute bottom-2 left-2 right-2 rounded bg-black/80 p-2 text-center text-xs text-white">
+                  <p role="alert">{previewError}</p>
+                  <button type="button" className="mt-1 font-semibold underline" onClick={() => { setPreviewError(''); videoRef.current?.load(); }}>Retry preview</button>
                 </div>
               )}
+
             </div>
           </div>
 
           {/* Transport Bar */}
           <div className="h-[40px] bg-slate-900 border border-slate-800 rounded-panel px-4 flex items-center justify-between text-white text-xs gap-4 mt-3 w-full max-w-xl">
             <div className="flex items-center gap-2">
-              <Button variant="ghost" size="sm" onClick={togglePlay} className="text-white hover:bg-slate-800">
+              <Button variant="ghost" size="sm" aria-label={isPlaying ? 'Pause preview' : 'Play preview'} onClick={togglePlay} disabled={!currentAsset || Boolean(previewError)} className="text-white hover:bg-slate-800">
                 {isPlaying ? <Pause className="w-3.5 h-3.5 text-white" /> : <Play className="w-3.5 h-3.5 text-white" />}
               </Button>
               <span className="font-mono text-mono-val font-semibold text-slate-200">
@@ -327,6 +398,22 @@ export const VideoEditorPage = () => {
               <span>Duration: {currentClip.duration}s</span>
             </div>
           </div>
+          {currentAsset && (
+            <input
+              type="range"
+              aria-label="Seek within selected clip"
+              min={currentClip.startTime}
+              max={currentClip.endTime}
+              step="0.1"
+              value={Math.min(Math.max(currentTime, currentClip.startTime), currentClip.endTime)}
+              onChange={(event) => {
+                const nextTime = Number(event.target.value);
+                if (videoRef.current) videoRef.current.currentTime = nextTime;
+                setCurrentTime(nextTime);
+              }}
+              className="mt-2 w-full max-w-xl accent-accent"
+            />
+          )}
         </div>
 
         {/* RIGHT INSPECTOR PANEL (300px) */}
@@ -355,13 +442,28 @@ export const VideoEditorPage = () => {
           </Button>
           {contentError && <p role="alert" className="text-xs text-rose-700">{contentError}</p>}
 
+          <div className="space-y-1.5">
+            <label htmlFor="post-caption" className="block text-micro text-ink-muted uppercase tracking-widest font-semibold">Post caption</label>
+            <textarea
+              id="post-caption"
+              value={currentClip.caption || ''}
+              onChange={(event) => updateClip(currentClip.id, { caption: event.target.value })}
+              rows={4}
+              placeholder="Add or edit the caption for your post."
+              className="w-full rounded-btn border border-border-subtle bg-white p-2 text-xs text-ink-primary focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
+            />
+            <p className="text-[11px] text-ink-muted">This caption is saved with the draft; it is not burned into the exported video.</p>
+          </div>
+
           {/* AI Hooks */}
           <div className="space-y-2">
             <label className="block text-micro text-ink-muted uppercase tracking-widest font-semibold">AI Opening Hooks</label>
             <div className="space-y-1.5">
               {currentClip.hooks?.map((h, idx) => (
-                <div
+                <button
                   key={idx}
+                  type="button"
+                  aria-pressed={currentClip.selectedHookIndex === idx}
                   onClick={() => updateClip(currentClip.id, { selectedHookIndex: idx })}
                   className={`p-2 rounded-btn border text-xs cursor-pointer transition-colors ${
                     currentClip.selectedHookIndex === idx
@@ -370,29 +472,7 @@ export const VideoEditorPage = () => {
                   }`}
                 >
                   {h}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Subtitles Overlay Lines */}
-          <div className="space-y-2 pt-2 border-t border-border-subtle">
-            <label className="block text-micro text-ink-muted uppercase tracking-widest font-semibold">Subtitles Overlay Lines</label>
-            <div className="space-y-1.5 max-h-36 overflow-y-auto">
-              {currentClip.subtitles?.map((sub, idx) => (
-                <div key={idx} className="flex items-center gap-1.5 bg-surface-inset p-1.5 rounded-btn border border-border-subtle text-xs">
-                  <span className="font-mono text-mono-val text-ink-muted shrink-0">{sub.start}s</span>
-                  <input
-                    type="text"
-                    value={sub.text}
-                    onChange={(e) => {
-                      const newSubs = [...currentClip.subtitles];
-                      newSubs[idx].text = e.target.value;
-                      updateClip(currentClip.id, { subtitles: newSubs });
-                    }}
-                    className="w-full bg-transparent text-xs text-ink-primary font-semibold focus:outline-none"
-                  />
-                </div>
+                </button>
               ))}
             </div>
           </div>
@@ -434,10 +514,10 @@ export const VideoEditorPage = () => {
       </div>
 
       {/* 3. BOTTOM TIMELINE (240px) */}
-      <div className="h-[220px] bg-white border-t border-border-subtle p-3 flex flex-col shrink-0">
+      <div className="min-h-32 max-h-[220px] bg-white border-t border-border-subtle p-3 flex flex-col shrink-0">
         <div className="flex items-center justify-between border-b border-border-subtle pb-2 mb-2">
           <div className="flex items-center gap-2">
-            <span className="text-micro text-ink-muted uppercase tracking-widest font-semibold">MULTI-TRACK TIMELINE</span>
+            <span className="text-micro text-ink-muted uppercase tracking-widest font-semibold">CLIP RANGE</span>
             <span className="font-mono text-mono-val font-semibold text-accent">
               Trim Range: {currentClip.startTime}s – {currentClip.endTime}s ({currentClip.duration}s)
             </span>
@@ -464,7 +544,7 @@ export const VideoEditorPage = () => {
             </div>
             <div className="flex-1 h-10 bg-surface-inset rounded-btn border border-border-subtle relative overflow-hidden flex items-center px-3">
               <div
-                style={{ left: `${(currentClip.startTime / (currentAsset?.duration || 160.0)) * 100}%`, width: `${(currentClip.duration / (currentAsset?.duration || 160.0)) * 100}%` }}
+                style={{ left: `${(currentClip.startTime / (currentAsset?.duration || currentClip.endTime)) * 100}%`, width: `${(currentClip.duration / (currentAsset?.duration || currentClip.endTime)) * 100}%` }}
                 className="absolute h-8 bg-accent/20 border-2 border-accent rounded-btn flex items-center justify-between px-2 font-mono text-mono-val text-accent font-bold"
               >
                 <span>{currentClip.startTime}s</span>
@@ -474,20 +554,6 @@ export const VideoEditorPage = () => {
             </div>
           </div>
 
-          {/* Subtitles Track */}
-          <div className="flex items-center gap-2">
-            <div className="w-24 text-[11px] font-semibold text-ink-secondary flex items-center gap-1 shrink-0">
-              <Type className="w-3.5 h-3.5 text-amber-500" /> Captions
-            </div>
-            <div className="flex-1 h-8 bg-surface-inset rounded-btn border border-border-subtle relative overflow-hidden flex items-center px-3">
-              <div
-                style={{ left: `${(currentClip.startTime / (currentAsset?.duration || 160.0)) * 100}%`, width: `${(currentClip.duration / (currentAsset?.duration || 160.0)) * 100}%` }}
-                className="absolute h-6 bg-amber-500/20 border border-amber-500 rounded-btn flex items-center px-2 font-mono text-[10px] text-amber-700 font-bold truncate"
-              >
-                AI Subtitles ({currentClip.subtitles?.length || 0} lines)
-              </div>
-            </div>
-          </div>
         </div>
       </div>
     </div>
@@ -499,4 +565,14 @@ function readableError(error, fallback) {
   if (typeof detail === 'string') return detail;
   if (detail?.message) return detail.message;
   return error.message || fallback;
+}
+
+function getDraftSnapshot(clip) {
+  if (!clip) return null;
+  const draftFields = { ...clip };
+  delete draftFields.status;
+  delete draftFields.exportedUrl;
+  delete draftFields.createdAt;
+  delete draftFields.updatedAt;
+  return JSON.stringify(draftFields);
 }

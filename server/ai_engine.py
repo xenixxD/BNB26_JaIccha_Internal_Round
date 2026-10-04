@@ -187,7 +187,7 @@ def analyze_video_potential(
             "suggested_hook": " ".join(words[0:8]) + "..." if len(words) >= 8 else text,
             "reasons": ["Optimal short-form pacing", "Strong topic resonance", f"Self-contained {dur}s window"]
         })
-    return candidates, provider_used
+    return candidates, "Heuristic Fallback Engine"
 
 def analyze_retention_risk(
     asset_id: str = "asset_v1",
@@ -226,6 +226,7 @@ def analyze_retention_risk(
         result["provider_used"] = provider_used
         return result, provider_used
 
+    provider_used = "Heuristic Fallback Engine"
     blocks = transcript_blocks or DEFAULT_TRANSCRIPT
     fallback = {
         "asset_id": asset_id,
@@ -250,7 +251,7 @@ def analyze_retention_risk(
         "methodology_note": "Heuristic prediction based on transcript pacing and topic boundaries.",
         "provider_used": provider_used
     }
-    return fallback, provider_used
+    return fallback, "Heuristic Fallback Engine"
 
 def generate_ab_hooks(
     segment_text: str,
@@ -323,7 +324,7 @@ def generate_ab_hooks(
             }
         ]
     }
-    return fallback, provider_used
+    return fallback, "Heuristic Fallback Engine"
 
 def generate_planner_ideas(
     topic: str,
@@ -384,7 +385,7 @@ def generate_planner_ideas(
             "planned_date": "Day 3"
         }
     ]
-    return {"topic": topic, "niche": niche, "items": fallback_items}, provider_used
+    return {"topic": topic, "niche": niche, "items": fallback_items}, "Heuristic Fallback Engine"
 
 def match_script_to_transcript(
     script_text: str,
@@ -476,7 +477,7 @@ def generate_ai_content(
             {"id": 1, "start": 0.0, "end": 3.5, "text": transcript_segment[:40]}
         ]
     }
-    return fallback, provider_used
+    return fallback, "Heuristic Fallback Engine"
 
 def transcribe_media_file(file_path: str) -> Dict[str, Any]:
     """

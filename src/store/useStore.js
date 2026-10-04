@@ -1,10 +1,15 @@
 import { create } from 'zustand';
 import { api } from '../services/api';
 
+let projectLoadRequestId = 0;
+let draftLoadRequestId = 0;
+
 export const useStore = create((set, get) => ({
       workspaceReady: false,
       workspaceLoadFailed: false,
       workspaceError: null,
+      projectStateLoadingId: null,
+      projectStateLoadFailed: false,
       draftVersions: [],
       outputs: [],
       systemHealth: {
@@ -25,6 +30,25 @@ export const useStore = create((set, get) => ({
 
       activeProjectId: null,
       activeClipId: null,
+      editorUnsavedChanges: false,
+      setEditorUnsavedChanges: (editorUnsavedChanges) => set({ editorUnsavedChanges }),
+      editorSavingDraft: false,
+      setEditorSavingDraft: (editorSavingDraft) => set({ editorSavingDraft }),
+      editorSavedClip: null,
+      setEditorSavedClip: (editorSavedClip) => set({ editorSavedClip }),
+      discardEditorChanges: () => {
+        const savedClip = get().editorSavedClip;
+        if (savedClip) {
+          set((state) => ({
+            clips: state.clips.map((clip) => clip.id === savedClip.id
+              ? { ...savedClip, status: clip.status, exportedUrl: clip.exportedUrl, createdAt: clip.createdAt, updatedAt: clip.updatedAt }
+              : clip),
+            editorUnsavedChanges: false
+          }));
+        } else {
+          set({ editorUnsavedChanges: false });
+        }
+      },
 
       projects: [],
       assets: [],
@@ -44,6 +68,7 @@ export const useStore = create((set, get) => ({
       setAiProvider: (provider) => set({ aiProvider: provider }),
 
       hydrateWorkspace: async () => {
+        const requestId = ++projectLoadRequestId;
         try {
           const workspace = await api.getWorkspace();
           // Older frontend versions wrote a high-scoring draft when a source video
@@ -53,13 +78,17 @@ export const useStore = create((set, get) => ({
             ...project,
             clipsCount: visibleClips.filter((clip) => clip.projectId === project.id).length
           }));
+          if (requestId !== projectLoadRequestId) return;
           const activeProjectId = workspace.projects.some((project) => project.id === get().activeProjectId)
             ? get().activeProjectId
             : visibleProjects[0]?.id || null;
           const activeClipId = visibleClips.some((clip) => clip.id === get().activeClipId && clip.projectId === activeProjectId)
             ? get().activeClipId
             : visibleClips.find((clip) => clip.projectId === activeProjectId)?.id || null;
-          const savedState = activeProjectId ? await api.getProjectState(activeProjectId) : {};
+          const [savedState, outputs] = activeProjectId
+            ? await Promise.all([api.getProjectState(activeProjectId), api.getProjectOutputs(activeProjectId)])
+            : [{}, []];
+          if (requestId !== projectLoadRequestId) return;
           set({
             projects: visibleProjects,
             assets: workspace.assets,
@@ -71,47 +100,58 @@ export const useStore = create((set, get) => ({
             scriptMatches: savedState.scriptMatches?.data || [],
             retentionAnalysis: savedState.retentionAnalysis?.data || null,
             abHookVariations: savedState.abHookVariations?.data || [],
+            outputs,
             workspaceReady: true,
             workspaceLoadFailed: false,
             workspaceError: null
           });
-          if (activeProjectId) {
-            set({ outputs: await api.getProjectOutputs(activeProjectId) });
-          }
         } catch (error) {
+          if (requestId !== projectLoadRequestId) return;
           set({
             workspaceReady: true,
             workspaceLoadFailed: true,
-            workspaceError: `Could not load locally persisted workspace: ${error.message}`
+            workspaceError: 'Could not load the saved workspace. Check the server connection and try again.'
           });
         }
       },
 
       loadProjectState: async (projectId) => {
+        const requestId = ++projectLoadRequestId;
+        set({ projectStateLoadingId: projectId, projectStateLoadFailed: false, workspaceError: null });
         try {
-          const savedState = await api.getProjectState(projectId);
+          const [savedState, outputs] = await Promise.all([
+            api.getProjectState(projectId),
+            api.getProjectOutputs(projectId)
+          ]);
+          if (requestId !== projectLoadRequestId || get().activeProjectId !== projectId) return;
           set({
             transcript: savedState.transcript?.data || [],
             candidateMoments: (savedState.candidateMoments?.data || []).filter((candidate) => !isUploadFallbackCandidate(candidate)),
             scriptMatches: savedState.scriptMatches?.data || [],
             retentionAnalysis: savedState.retentionAnalysis?.data || null,
             abHookVariations: savedState.abHookVariations?.data || [],
-            outputs: await api.getProjectOutputs(projectId),
+            outputs,
+            projectStateLoadingId: null,
+            projectStateLoadFailed: false,
             workspaceError: null
           });
         } catch (error) {
-          set({ workspaceError: `Could not load saved project data: ${error.message}` });
+          if (requestId !== projectLoadRequestId || get().activeProjectId !== projectId) return;
+          set({ projectStateLoadFailed: true, workspaceError: 'Could not load this project’s saved data. Try loading it again.' });
+        } finally {
+          if (requestId === projectLoadRequestId) set({ projectStateLoadingId: null });
         }
       },
 
-      persistProjectState: async (stateKey, data) => {
-        const projectId = get().activeProjectId;
-        if (!projectId) return;
+      persistProjectState: async (stateKey, data, projectIdOverride) => {
+        const projectId = projectIdOverride || get().activeProjectId;
+        if (!projectId) throw new Error('Select a project before saving project data.');
         try {
           await api.saveProjectState(projectId, stateKey, data);
           set({ workspaceError: null });
         } catch (error) {
-          set({ workspaceError: `Could not persist ${stateKey}: ${error.message}` });
+          set({ workspaceError: `Could not save ${stateKey}. Check the server connection and try again.` });
+          throw error;
         }
       },
 
@@ -121,20 +161,29 @@ export const useStore = create((set, get) => ({
       },
 
       setActiveProject: (id) => {
+        ++projectLoadRequestId;
         const nextClipId = get().clips.find((clip) => clip.projectId === id)?.id || null;
-        set({ activeProjectId: id, activeClipId: nextClipId });
+        set({ activeProjectId: id, activeClipId: nextClipId, editorUnsavedChanges: false, editorSavedClip: null, projectStateLoadingId: id || null, projectStateLoadFailed: false,
+          draftVersions: [], transcript: [], candidateMoments: [], scriptMatches: [], retentionAnalysis: null, abHookVariations: [], outputs: [] });
         if (id) get().loadProjectState(id);
-        else set({ transcript: [], candidateMoments: [], scriptMatches: [], retentionAnalysis: null, abHookVariations: [], outputs: [] });
+        else set({ projectStateLoadingId: null });
       },
-      setActiveClip: (id) => set({ activeClipId: id }),
+      setActiveClip: (id) => set({ activeClipId: id, draftVersions: [] }),
 
       createProject: async (projectData) => {
         try {
           const newProject = await api.createProject(projectData);
+          ++projectLoadRequestId;
+          get().discardEditorChanges();
           set((state) => ({
             projects: [newProject, ...state.projects.filter((project) => project.id !== newProject.id)],
             activeProjectId: newProject.id,
             activeClipId: null,
+            editorUnsavedChanges: false,
+            editorSavedClip: null,
+            projectStateLoadingId: null,
+            projectStateLoadFailed: false,
+            draftVersions: [],
             transcript: [],
             candidateMoments: [],
             scriptMatches: [],
@@ -145,7 +194,7 @@ export const useStore = create((set, get) => ({
           }));
           return newProject;
         } catch (error) {
-          set({ workspaceError: `Could not save project: ${error.message}` });
+          set({ workspaceError: readableStoreError(error, 'Could not create this project. Try again.') });
           throw error;
         }
       },
@@ -204,7 +253,7 @@ export const useStore = create((set, get) => ({
           }
           return deleted;
         } catch (error) {
-          set({ workspaceError: `Could not delete project: ${error.message}` });
+          set({ workspaceError: readableStoreError(error, 'Could not delete this project. Try again.') });
           throw error;
         }
       },
@@ -233,7 +282,7 @@ export const useStore = create((set, get) => ({
             assets: [newAsset, ...state.assets.filter((asset) => asset.id !== newAsset.id)],
             projects: state.projects.map((project) =>
               project.id === newAsset.projectId
-                ? { ...project, assetsCount: (project.assetsCount || 0) + 1 }
+                ? { ...project, assetsCount: (project.assetsCount || 0) + (newAsset.duplicate ? 0 : 1) }
                 : project
             ),
             workspaceError: null
@@ -241,7 +290,7 @@ export const useStore = create((set, get) => ({
 
           return newAsset;
         } catch (error) {
-          set({ workspaceError: `Could not persist asset: ${error.message}` });
+          set({ workspaceError: readableStoreError(error, 'Could not save this asset. Try again.') });
           throw error;
         }
       },
@@ -262,7 +311,7 @@ export const useStore = create((set, get) => ({
                 ? { ...asset, duration: previousDuration }
                 : asset
             ),
-            workspaceError: `Could not save asset duration: ${error.message}`
+            workspaceError: readableStoreError(error, 'Could not save the video duration.')
           }));
         }
       },
@@ -302,7 +351,7 @@ export const useStore = create((set, get) => ({
             };
           });
         } catch (error) {
-          set({ workspaceError: `Could not delete asset: ${error.message}` });
+          set({ workspaceError: readableStoreError(error, 'Could not delete this asset. Try again.') });
         }
       },
 
@@ -316,32 +365,36 @@ export const useStore = create((set, get) => ({
       },
 
       runPotentialAnalyzer: async (assetId) => {
+        const projectId = get().assets.find((asset) => asset.id === assetId)?.projectId || get().activeProjectId;
+        const priorCandidates = get().activeProjectId === projectId ? get().candidateMoments : [];
         const response = await api.analyzePotential(assetId, get().aiProvider);
         const candidates = (response?.candidates || []).map((candidate) => ({
           ...candidate,
           assetId: candidate.assetId || assetId
         }));
         const allCandidates = [
-          ...get().candidateMoments.filter((candidate) => candidate.assetId !== assetId),
+          ...priorCandidates.filter((candidate) => candidate.assetId !== assetId),
           ...candidates
         ];
-        set({ candidateMoments: allCandidates });
-        await get().persistProjectState('candidateMoments', allCandidates);
+        if (get().activeProjectId === projectId) set({ candidateMoments: allCandidates });
+        await get().persistProjectState('candidateMoments', allCandidates, projectId);
         return candidates;
       },
 
       runRetentionAnalyzer: async (assetId) => {
+        const projectId = get().assets.find((asset) => asset.id === assetId)?.projectId || get().activeProjectId;
         const response = await api.analyzeRetention(assetId, get().aiProvider);
-        set({ retentionAnalysis: response });
-        await get().persistProjectState('retentionAnalysis', response);
+        if (get().activeProjectId === projectId) set({ retentionAnalysis: response });
+        await get().persistProjectState('retentionAnalysis', response, projectId);
         return response;
       },
 
       runAbHookGenerator: async (clipId, segmentText) => {
+        const projectId = get().clips.find((clip) => clip.id === clipId)?.projectId || get().activeProjectId;
         const response = await api.generateAbHooks(clipId, segmentText, 'curious', 'Creators & Engineers', get().aiProvider);
         const variations = response?.variations || [];
-        set({ abHookVariations: variations });
-        await get().persistProjectState('abHookVariations', variations);
+        if (get().activeProjectId === projectId) set({ abHookVariations: variations });
+        await get().persistProjectState('abHookVariations', variations, projectId);
         return variations;
       },
 
@@ -361,6 +414,8 @@ export const useStore = create((set, get) => ({
         }));
       },
       runScriptMatcher: async (assetId, scriptText, scriptTitle = 'Script') => {
+        const projectId = get().assets.find((asset) => asset.id === assetId)?.projectId || get().activeProjectId;
+        const priorMatches = get().activeProjectId === projectId ? get().scriptMatches : [];
         try {
           const response = await api.matchScript(
             assetId,
@@ -370,17 +425,17 @@ export const useStore = create((set, get) => ({
           const matches = response.matches.map((match) => ({
             ...match,
             assetId,
-            projectId: get().activeProjectId,
+            projectId,
             scriptId: response.script_id,
             scriptVersionId: response.script_version_id,
             transcriptId: response.transcript_id
           }));
           const projectMatches = [
-            ...get().scriptMatches.filter((match) => match.assetId !== assetId),
+            ...priorMatches.filter((match) => match.assetId !== assetId),
             ...matches
           ];
-          set({ scriptMatches: projectMatches });
-          await get().persistProjectState('scriptMatches', projectMatches);
+          if (get().activeProjectId === projectId) set({ scriptMatches: projectMatches });
+          await get().persistProjectState('scriptMatches', projectMatches, projectId);
           return {
             matches,
             scriptId: response.script_id,
@@ -388,12 +443,7 @@ export const useStore = create((set, get) => ({
             transcriptId: response.transcript_id
           };
         } catch (error) {
-          const remainingMatches = get().scriptMatches.filter(
-            (match) => match.assetId !== assetId
-          );
-          set({ scriptMatches: remainingMatches });
-          await get().persistProjectState('scriptMatches', remainingMatches);
-          set({ workspaceError: `Could not match script to footage: ${error.message}` });
+          if (get().activeProjectId === projectId) set({ workspaceError: readableStoreError(error, 'Could not match this script to the selected footage.') });
           throw error;
         }
       },
@@ -401,12 +451,6 @@ export const useStore = create((set, get) => ({
       generateClip: async (candidate) => {
         const startTime = candidate.start_time ?? candidate.startTime ?? 0.0;
         const endTime = candidate.end_time ?? candidate.endTime ?? startTime + 30.0;
-        let preferences = {};
-        try {
-          preferences = JSON.parse(window.localStorage.getItem('creatorai.preferences.v1') || '{}');
-        } catch {
-          preferences = {};
-        }
         const clipData = {
           projectId: get().activeProjectId,
           assetId: candidate.assetId || null,
@@ -414,7 +458,7 @@ export const useStore = create((set, get) => ({
           startTime,
           endTime,
           duration: round(endTime - startTime, 1),
-          aspectRatio: preferences.aspectRatio || '9:16',
+          aspectRatio: '9:16',
           potentialScore: candidate.potential_score ?? candidate.potentialScore ?? null,
           ratingLabel: candidate.rating_label || 'Script match',
           suggestedHook: candidate.suggested_hook || null,
@@ -425,7 +469,7 @@ export const useStore = create((set, get) => ({
           subtitles: [],
           status: 'Draft',
           scheduledDate: null,
-          platform: preferences.platform || 'Instagram Reels',
+          platform: 'Instagram Reels',
           exportedUrl: null,
           metadata: candidate.scriptVersionId
             ? {
@@ -442,7 +486,7 @@ export const useStore = create((set, get) => ({
           const newClip = await api.createClip(clipData);
           set((state) => ({
             clips: [newClip, ...state.clips],
-            activeClipId: newClip.id,
+            activeClipId: state.activeProjectId === newClip.projectId ? newClip.id : state.activeClipId,
             projects: state.projects.map((project) =>
               project.id === newClip.projectId
                 ? { ...project, clipsCount: (project.clipsCount || 0) + 1 }
@@ -452,7 +496,7 @@ export const useStore = create((set, get) => ({
           }));
           return newClip;
         } catch (error) {
-          set({ workspaceError: `Could not save clip: ${error.message}` });
+          set({ workspaceError: readableStoreError(error, 'Could not create this clip. Try again.') });
           throw error;
         }
       },
@@ -492,8 +536,9 @@ export const useStore = create((set, get) => ({
             clips: state.clips.map((item) =>
               item.id === clipId ? { ...item, status: clip.status } : item
             ),
-            workspaceError: `Could not save clip status: ${error.message}`
+            workspaceError: readableStoreError(error, 'Could not update this clip. Try again.')
           }));
+          throw error;
         }
       },
 
@@ -502,26 +547,31 @@ export const useStore = create((set, get) => ({
         if (!clip) throw new Error('Clip not found');
         try {
           const draft = await api.saveClipDraft(clipId, clip);
-          set((state) => ({
-            clips: state.clips.map((item) => item.id === clipId ? draft.payload : item),
+          let unchangedWhileSaving = false;
+          set((state) => {
+            const latestClip = state.clips.find((item) => item.id === clipId);
+            unchangedWhileSaving = JSON.stringify(latestClip) === JSON.stringify(clip);
+            return {
+            clips: state.clips.map((item) => item.id === clipId && unchangedWhileSaving ? draft.payload : item),
             draftVersions: [...state.draftVersions, draft],
             workspaceError: null
-          }));
+          }; });
+          get().setEditorSavedClip(draft.payload);
           return draft;
         } catch (error) {
-          set({ workspaceError: `Could not save draft: ${error.message}` });
+          set({ workspaceError: readableStoreError(error, 'Could not save this draft. Try again.') });
           throw error;
         }
       },
 
       loadDraftVersions: async (clipId) => {
+        const requestId = ++draftLoadRequestId;
         try {
           const draftVersions = await api.getClipDrafts(clipId);
-          set({ draftVersions });
+          if (requestId === draftLoadRequestId && get().activeClipId === clipId) set({ draftVersions });
           return draftVersions;
         } catch (error) {
-          set({ workspaceError: `Could not load draft history: ${error.message}` });
-          return [];
+          throw error;
         }
       },
 
@@ -584,9 +634,10 @@ export const useStore = create((set, get) => ({
             )
           }));
           try {
-            set({ outputs: await api.getProjectOutputs(clip.projectId), workspaceError: null });
+            const outputs = await api.getProjectOutputs(clip.projectId);
+            if (get().activeProjectId === clip.projectId) set({ outputs, workspaceError: null });
           } catch (error) {
-            set({ workspaceError: `Export completed but output metadata could not be reloaded: ${error.message}` });
+            set({ workspaceError: 'The video exported, but CreatorAI could not reload the output list. Reopen this project to refresh it.' });
           }
         }
         return res;
@@ -604,5 +655,24 @@ function isUploadPlaceholderClip(clip) {
 }
 
 function isUploadFallbackCandidate(candidate) {
-  return candidate.id === 'cand_1' || candidate.id === 'cand_2' || candidate.id?.startsWith('cand_user_');
+  const fallbackReasons = Array.isArray(candidate.reasons) &&
+    candidate.reasons.includes('Optimal short-form pacing') &&
+    candidate.reasons.includes('Strong topic resonance') &&
+    candidate.reasons.some((reason) => typeof reason === 'string' && reason.startsWith('Self-contained '));
+  return candidate.id === 'cand_1' || candidate.id === 'cand_2' || candidate.id?.startsWith('cand_user_') || fallbackReasons;
+}
+
+function readableStoreError(error, fallback) {
+  const status = error.response?.status;
+  const detail = error.response?.data?.detail;
+  const message = typeof detail === 'string' ? detail : detail?.message;
+  if (message) return message;
+  if (!error.response && (error.isAxiosError || /network error|timeout/i.test(error.message || ''))) return 'CreatorAI could not reach the server. Check your connection and try again.';
+  if (/request failed with status code/i.test(error.message || '')) return fallback;
+  if (status === 404) return 'This item could not be found. Refresh the workspace and try again.';
+  if (status === 401 || status === 403) return 'You do not have permission to perform this action.';
+  if (status === 413) return 'This file is larger than the upload limit.';
+  if (status === 400 || status === 422) return fallback;
+  if (status >= 500) return 'CreatorAI could not complete this request. Try again.';
+  return error.message || fallback;
 }

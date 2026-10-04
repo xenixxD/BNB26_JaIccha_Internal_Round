@@ -18,7 +18,7 @@ import {
 
 export const ProjectsPage = () => {
   const navigate = useNavigate();
-  const { projects, activeProjectId, setActiveProject, assets, clips, outputs } = useStore();
+  const { projects, activeProjectId, setActiveProject, setActiveClip, assets, clips, outputs } = useStore();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [filterCategory, setFilterCategory] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
@@ -209,10 +209,10 @@ export const ProjectsPage = () => {
             <div className="p-3 rounded-btn border border-border-subtle bg-surface-inset space-y-2">
               <span className="text-micro text-ink-muted uppercase tracking-widest font-semibold block">GENERATED CLIPS ({projClips.length})</span>
               {projClips.map((c) => (
-                <div key={c.id} onClick={() => navigate('/video-editor')} className="p-2 rounded-btn bg-white border border-border-subtle flex items-center justify-between text-xs font-medium text-ink-primary cursor-pointer hover:border-accent">
+                <button type="button" key={c.id} onClick={() => { setActiveClip(c.id); navigate('/video-editor'); }} className="w-full rounded-btn border border-border-subtle bg-white p-2 flex items-center justify-between text-left text-xs font-medium text-ink-primary hover:border-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">
                   <span className="truncate">{c.title}</span>
                   <Badge variant="neutral" size="sm">{c.status}</Badge>
-                </div>
+                </button>
               ))}
             </div>
           </div>

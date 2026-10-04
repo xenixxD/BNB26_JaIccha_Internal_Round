@@ -6,25 +6,32 @@ import {
   FolderKanban,
   FolderSearch,
   Video,
+  Scissors,
   CalendarDays,
-  BarChart3,
   Settings,
   Plus,
   ChevronDown
 } from 'lucide-react';
 
 export const Sidebar = ({ onOpenNewProjectModal }) => {
-  const { projects, activeProjectId, setActiveProject, user } = useStore();
+  const { projects, activeProjectId, setActiveProject, editorUnsavedChanges, editorSavingDraft, discardEditorChanges, user } = useStore();
 
   const activeProj = projects.find((p) => p.id === activeProjectId) || projects[0];
+
+  const handleProjectChange = (projectId) => {
+    if (editorSavingDraft) return;
+    if (editorUnsavedChanges && !window.confirm('You have unsaved editor changes. Leave this clip without saving them?')) return;
+    if (editorUnsavedChanges) discardEditorChanges();
+    setActiveProject(projectId);
+  };
 
   const navItems = [
     { name: 'Home', path: '/', icon: LayoutDashboard },
     { name: 'Projects', path: '/projects', icon: FolderKanban, badge: projects.length },
     { name: 'Footage', path: '/assets', icon: FolderSearch },
     { name: 'Find clips', path: '/clip-studio', icon: Video },
+    { name: 'Editor', path: '/video-editor', icon: Scissors },
     { name: 'Planner', path: '/planner', icon: CalendarDays },
-    { name: 'Analytics', path: '/analytics', icon: BarChart3 },
     { name: 'Settings', path: '/settings', icon: Settings },
   ];
 
@@ -66,7 +73,7 @@ export const Sidebar = ({ onOpenNewProjectModal }) => {
 
             return (
               <NavLink
-                key={idx}
+                key={item.path}
                 to={item.path}
                 className={({ isActive: linkActive }) => {
                   const active = linkActive;
@@ -118,8 +125,9 @@ export const Sidebar = ({ onOpenNewProjectModal }) => {
           <select
             aria-label="Choose current project"
             value={activeProj?.id || ''}
-            onChange={(event) => setActiveProject(event.target.value)}
-            className="max-w-20 bg-transparent text-transparent outline-none cursor-pointer"
+            disabled={editorSavingDraft}
+            onChange={(event) => handleProjectChange(event.target.value)}
+            className="max-w-20 bg-transparent text-transparent outline-none cursor-pointer disabled:cursor-wait"
           >
             {!projects.length && <option value="">No projects</option>}
             {projects.map((project) => <option key={project.id} value={project.id} className="text-ink-primary">{project.name}</option>)}

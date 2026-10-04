@@ -398,6 +398,30 @@ async def upload_asset(
             checksum, mime_type = _file_checksum_and_mime(saved_path, file_type, file_ext)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        existing_asset = next(
+            (
+                asset
+                for asset in list_assets(project_id)
+                if asset.get("checksum") == checksum and asset.get("file_type") == file_type
+            ),
+            None,
+        )
+        if existing_asset:
+            os.remove(saved_path)
+            return AssetResponse(
+                id=existing_asset["id"],
+                project_id=existing_asset["project_id"],
+                filename=existing_asset["filename"],
+                file_type=existing_asset["file_type"],
+                file_size=existing_asset["file_size"],
+                url=existing_asset["url"],
+                upload_date=existing_asset["upload_date"],
+                duration=existing_asset.get("duration"),
+                status=existing_asset["status"],
+                checksum=existing_asset.get("checksum"),
+                mime_type=existing_asset.get("mime_type"),
+                duplicate=True,
+            )
         file_url = f"/uploads/{saved_filename}"
         try:
             asset = create_asset({
@@ -444,12 +468,24 @@ async def upload_asset(
     finally:
         await file.close()
 
+
+def _require_ai_result(provider_used: str):
+    if provider_used == "Heuristic Fallback Engine":
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "AI_PROVIDER_UNAVAILABLE",
+                "message": "CreatorAI could not reach a configured AI provider. Check the server provider settings and try again.",
+            },
+        )
+
 @app.post("/api/ai/analyze-potential", response_model=PotentialAnalysisResponse)
 def api_analyze_potential(request: PotentialAnalysisRequest):
     candidates, provider_used = analyze_video_potential(
         asset_filename=request.asset_id,
         provider=request.provider or "auto"
     )
+    _require_ai_result(provider_used)
     return PotentialAnalysisResponse(
         asset_id=request.asset_id,
         candidates=candidates,
@@ -463,6 +499,7 @@ def api_analyze_retention(request: RetentionAnalysisRequest):
         asset_id=request.asset_id,
         provider=request.provider or "auto"
     )
+    _require_ai_result(provider_used)
     return RetentionAnalysisResponse(**res)
 
 @app.post("/api/ai/ab-hooks", response_model=ABHookResponse)
@@ -473,6 +510,8 @@ def api_ab_hooks(request: ABHookRequest):
         audience=request.audience or "Creators & Engineers",
         provider=request.provider or "auto"
     )
+    _require_ai_result(provider_used)
+    res["provider_used"] = provider_used
     return ABHookResponse(**res)
 
 @app.post("/api/ai/planner-generate", response_model=PlannerGenerateResponse)
@@ -483,6 +522,7 @@ def api_planner_generate(request: PlannerGenerateRequest):
         days=request.days or 7,
         provider=request.provider or "auto"
     )
+    _require_ai_result(provider_used)
     return PlannerGenerateResponse(
         topic=res["topic"],
         niche=res["niche"],
@@ -565,6 +605,7 @@ def api_generate_content(request: ContentGenRequest):
         topic=request.topic or "AI Creator Workflow",
         provider=request.provider or "auto"
     )
+    _require_ai_result(provider_used)
     return ContentGenResponse(
         hooks=content.get("hooks", []),
         caption=content.get("caption", ""),

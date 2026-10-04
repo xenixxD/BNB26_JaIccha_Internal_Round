@@ -14,6 +14,7 @@ export const PlannerPage = () => {
   const [ideas, setIdeas] = useState([]);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState('');
+  const [statusError, setStatusError] = useState('');
 
   const drafts = clips.filter((clip) => ['Draft', 'Ready for Review'].includes(clip.status));
 
@@ -30,6 +31,15 @@ export const PlannerPage = () => {
       setError(readableError(requestError, 'Ideas could not be generated. Try again.'));
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const handleClipStatusChange = async (clipId, status) => {
+    setStatusError('');
+    try {
+      await moveClipStatus(clipId, status);
+    } catch (requestError) {
+      setStatusError(readableError(requestError, 'Clip status could not be saved. Try again.'));
     }
   };
 
@@ -76,6 +86,7 @@ export const PlannerPage = () => {
       </Panel>
 
       <Panel title="Your clips" subtitle="Drafts made from your source footage. Publishing and scheduling are not connected yet.">
+        {statusError && <p role="alert" className="mb-3 text-sm text-rose-700">{statusError}</p>}
         {drafts.length === 0 ? (
           <div className="py-8 text-center">
             <CalendarDays className="mx-auto h-8 w-8 text-ink-muted" />
@@ -96,7 +107,7 @@ export const PlannerPage = () => {
                   <select
                     aria-label={`Status for ${clip.title}`}
                     value={clip.status}
-                    onChange={(event) => moveClipStatus(clip.id, event.target.value)}
+                    onChange={(event) => handleClipStatusChange(clip.id, event.target.value)}
                     className="min-h-9 rounded-btn border border-border-subtle bg-white px-2 text-xs"
                   >
                     <option value="Draft">Draft</option>

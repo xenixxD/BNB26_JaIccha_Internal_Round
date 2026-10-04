@@ -55,6 +55,7 @@ export const ClipStudioPage = () => {
     )?.id || null
   );
   const [isPlaying, setIsPlaying] = useState(false);
+  const [previewError, setPreviewError] = useState('');
   const [currentTime, setCurrentTime] = useState(0);
   const [videoSrc, setVideoSrc] = useState(null);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
@@ -121,6 +122,7 @@ export const ClipStudioPage = () => {
   // When source video changes, reset analysis error state, seek to start, and run potential analysis for selected asset
   useEffect(() => {
     setAnalysisError(null);
+    setPreviewError('');
     setCurrentTime(0);
     if (videoRef.current) {
       videoRef.current.currentTime = 0;
@@ -223,8 +225,7 @@ export const ClipStudioPage = () => {
   const handleSeekVideo = (seconds) => {
     if (videoRef.current) {
       videoRef.current.currentTime = seconds;
-      videoRef.current.play();
-      setIsPlaying(true);
+      setCurrentTime(seconds);
     }
   };
 
@@ -415,19 +416,19 @@ export const ClipStudioPage = () => {
                         updateAssetDuration(activeAsset.id, e.target.duration);
                       }
                     }}
+                    onPlay={() => setIsPlaying(true)}
+                    onPause={() => setIsPlaying(false)}
+                    onError={() => setPreviewError('Preview unavailable. Check that this source video is still in the project.')}
                     onTimeUpdate={() => videoRef.current && setCurrentTime(videoRef.current.currentTime)}
                     controls
                     className="w-full h-full object-contain"
                   />
                 )}
+              {previewError && <p role="alert" className="absolute bottom-2 left-2 right-2 rounded bg-black/80 p-2 text-xs text-white">{previewError}</p>}
               </div>
 
               <div className="bg-surface-inset px-4 py-2 border-t border-border-subtle space-y-2">
-                <div className="relative h-3 bg-border-subtle rounded-full overflow-hidden cursor-pointer flex items-center" onClick={(e) => {
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const pct = (e.clientX - rect.left) / rect.width;
-                  handleSeekVideo(pct * (activeAsset?.duration || 0));
-                }}>
+                <div aria-hidden="true" className="relative h-3 bg-border-subtle rounded-full overflow-hidden flex items-center">
                   {moments.map((m) => {
                     const duration = activeAsset?.duration || 1;
                     const startPct = (m.start_time / duration) * 100;
@@ -444,18 +445,31 @@ export const ClipStudioPage = () => {
                     );
                   })}
                 </div>
+                <input
+                  type="range"
+                  aria-label="Seek through source video"
+                  min="0"
+                  max={activeAsset?.duration || videoRef.current?.duration || 0}
+                  step="0.1"
+                  value={Math.min(currentTime, activeAsset?.duration || videoRef.current?.duration || 0)}
+                  onChange={(event) => handleSeekVideo(Number(event.target.value))}
+                  disabled={!activeAsset || !(activeAsset.duration || videoRef.current?.duration)}
+                  className="w-full accent-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                />
 
                 <div className="flex items-center justify-between text-xs text-ink-secondary">
                   <div className="flex items-center gap-2">
-                    <Button variant="ghost" size="sm" onClick={() => {
-                      if (videoRef.current) {
-                        if (isPlaying) videoRef.current.pause();
-                        else videoRef.current.play();
-                        setIsPlaying(!isPlaying);
+                    <Button variant="ghost" size="sm" aria-label={isPlaying ? 'Pause source video' : 'Play source video'} disabled={!activeAsset || Boolean(previewError)} onClick={async () => {
+                      if (!videoRef.current) return;
+                      if (isPlaying) videoRef.current.pause();
+                      else {
+                        try { await videoRef.current.play(); }
+                        catch { setPreviewError('This video could not be played in the current browser.'); }
                       }
                     }}>
                       {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
                     </Button>
+                    {previewError && <Button variant="ghost" size="sm" onClick={() => { setPreviewError(''); videoRef.current?.load(); }}>Retry preview</Button>}
                     <span className="font-mono text-mono-val font-semibold text-ink-primary">
                       {currentTime.toFixed(1)}s / {activeAsset?.duration ? `${activeAsset.duration.toFixed(1)}s` : '—'}
                     </span>
@@ -502,20 +516,25 @@ export const ClipStudioPage = () => {
                 return (
                   <div
                     key={cand.id}
-                    onClick={() => setActiveCandidateId(cand.id)}
-                    className={`p-3 rounded-panel border text-xs cursor-pointer transition-all space-y-2.5 ${
+                    className={`p-3 rounded-panel border text-xs transition-all space-y-2.5 ${
                       isActive ? 'border-accent ring-1 ring-accent bg-accent-soft/20 shadow-sm' : 'border-border-subtle bg-white'
                     }`}
                   >
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex items-center gap-2">
                         <input
+                          type="radio"
+                          name="active-candidate"
+                          checked={isActive}
+                          onChange={() => setActiveCandidateId(cand.id)}
+                          aria-label={`Preview ${cand.title}`}
+                          className="h-4 w-4 border-border-strong text-accent"
+                        />
+                        <input
                           type="checkbox"
                           checked={isChecked}
-                          onChange={(e) => {
-                            e.stopPropagation();
-                            toggleSelectCandidate(cand.id);
-                          }}
+                          onChange={() => toggleSelectCandidate(cand.id)}
+                          aria-label={`Select ${cand.title} to create a draft`}
                           className="w-4 h-4 rounded border-border-strong text-accent cursor-pointer"
                         />
                         <Badge variant={isHigh ? 'accent' : 'neutral'}>

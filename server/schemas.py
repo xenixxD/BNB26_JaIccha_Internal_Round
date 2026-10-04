@@ -42,6 +42,7 @@ class AssetResponse(BaseModel):
     status: str # "ready" | "processing" | "error"
     checksum: Optional[str] = None
     mime_type: Optional[str] = None
+    duplicate: bool = False
 
 class ProjectListResponse(BaseModel):
     projects: List[ProjectItem]

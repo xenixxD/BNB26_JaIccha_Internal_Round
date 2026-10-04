@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useStore } from '../../store/useStore';
-import { X, FolderPlus, Layers, Target } from 'lucide-react';
+import { X, FolderPlus } from 'lucide-react';
+import { Button } from '../ui/Button';
 
 export const NewProjectModal = ({ isOpen, onClose }) => {
   const { createProject } = useStore();
@@ -29,7 +30,7 @@ export const NewProjectModal = ({ isOpen, onClose }) => {
       setDescription('');
       onClose();
     } catch (err) {
-      setError(err.message || 'Could not save project to local storage.');
+      setError(readableProjectError(err));
     } finally {
       setSaving(false);
     }
@@ -44,49 +45,50 @@ export const NewProjectModal = ({ isOpen, onClose }) => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-slate-800 rounded-xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-150">
-        <div className="px-5 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/50">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
+      <div role="dialog" aria-modal="true" aria-labelledby="new-project-title" className="w-full max-w-lg overflow-hidden rounded-panel border border-border-subtle bg-white shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+        <div className="flex items-center justify-between border-b border-border-subtle bg-surface-inset px-5 py-3.5">
           <div className="flex items-center gap-2">
-            <FolderPlus className="w-5 h-5 text-indigo-400" />
-            <h3 className="font-bold text-slate-100 text-sm">Create New Project</h3>
+            <FolderPlus className="h-5 w-5 text-accent" />
+            <h3 id="new-project-title" className="font-bold text-title-panel text-ink-primary">Create a project</h3>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-200">
-            <X className="w-4 h-4" />
-          </button>
+          <Button type="button" variant="ghost" size="sm" onClick={onClose} disabled={saving} icon={X} aria-label="Close create project dialog" />
         </div>
 
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
-          {error && <p role="alert" className="text-xs text-rose-400">{error}</p>}
+          {error && <p role="alert" className="text-sm text-rose-700">{error}</p>}
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1">Project Name *</label>
+            <label htmlFor="project-name" className="mb-1 block text-xs font-semibold text-ink-secondary">Project name *</label>
             <input
+              id="project-name"
               type="text"
               required
               placeholder="e.g. Weekly Product Update"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
+              className="min-h-10 w-full rounded-btn border border-border-subtle bg-white px-3 py-2 text-sm text-ink-primary focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1">Description</label>
+            <label htmlFor="project-description" className="mb-1 block text-xs font-semibold text-ink-secondary">Description</label>
             <textarea
+              id="project-description"
               rows={2}
               placeholder="Brief description of the long-form content or event..."
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
+              className="w-full rounded-btn border border-border-subtle bg-white px-3 py-2 text-sm text-ink-primary focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1">Category</label>
+            <label htmlFor="project-category" className="mb-1 block text-xs font-semibold text-ink-secondary">Category</label>
             <select
+              id="project-category"
               value={category}
               onChange={(e) => setCategory(e.target.value)}
-              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
+              className="min-h-10 w-full rounded-btn border border-border-subtle bg-white px-3 py-2 text-sm text-ink-primary focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
             >
               <option value="Technology & AI">Technology & AI</option>
               <option value="Product & Startup">Product & Startup</option>
@@ -97,17 +99,18 @@ export const NewProjectModal = ({ isOpen, onClose }) => {
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1.5">Target Platforms</label>
+            <p className="mb-1.5 block text-xs font-semibold text-ink-secondary">Target platforms</p>
             <div className="flex flex-wrap gap-2">
               {['Instagram Reels', 'YouTube Shorts', 'TikTok', 'LinkedIn'].map((p) => (
                 <button
                   type="button"
                   key={p}
+                  aria-pressed={platforms.includes(p)}
                   onClick={() => togglePlatform(p)}
-                  className={`text-xs px-2.5 py-1 rounded-md border transition-all ${
+                  className={`min-h-9 rounded-btn border px-2.5 py-1 text-xs transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${
                     platforms.includes(p)
-                      ? 'bg-indigo-600/20 border-indigo-500 text-indigo-300 font-semibold'
-                      : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-slate-200'
+                      ? 'border-accent bg-accent-soft text-accent-text font-semibold'
+                      : 'border-border-subtle bg-white text-ink-secondary hover:border-border-strong'
                   }`}
                 >
                   {p}
@@ -116,24 +119,22 @@ export const NewProjectModal = ({ isOpen, onClose }) => {
             </div>
           </div>
 
-          <div className="pt-3 border-t border-slate-800 flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-lg"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={saving}
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-lg shadow-md shadow-indigo-600/20"
-            >
-              {saving ? 'Saving...' : 'Create Project'}
-            </button>
+          <div className="flex justify-end gap-2 border-t border-border-subtle pt-3">
+            <Button type="button" variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
+            <Button type="submit" variant="primary" isLoading={saving}>Create project</Button>
           </div>
         </form>
       </div>
     </div>
   );
 };
+
+function readableProjectError(error) {
+  const status = error.response?.status;
+  const detail = error.response?.data?.detail;
+  const message = typeof detail === 'string' ? detail : detail?.message;
+  if (!error.response) return 'CreatorAI could not reach the server. Check your connection and try again.';
+  if (status === 400 || status === 422) return message || 'Check the project details and try again.';
+  if (status >= 500) return 'CreatorAI could not create the project. Try again.';
+  return message || 'Could not create this project. Try again.';
+}
